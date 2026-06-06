@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- Lock the viewport: no zoom, no scroll, fill the screen incl. the notch area. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#1b1b1f" />
+  <title>RetroPie Controller</title>
+  <link rel="stylesheet" href="controller.css" />
+</head>
+<body>
+  <div id="status" class="status status--connecting" role="status" aria-live="polite">
+    Connecting…
+  </div>
+
+  <!-- Top chrome, pinned to the corners clear of the thumb zones. Left cluster:
+       fullscreen toggle (UI chrome, no data-button) + the L shoulder. Right cluster:
+       the R shoulder + EXIT. L/R/EXIT carry data-button (real gamepad buttons). -->
+  <div class="chrome chrome--left">
+    <!-- Fullscreen toggle. On iPhone Safari (no Fullscreen API) it opens the
+         Add-to-Home-Screen help; elsewhere it toggles the real Fullscreen API.
+         controller.js hides it when the page is already running standalone. -->
+    <button class="btn btn--fs" id="fullscreen-btn" aria-label="Fullscreen">⛶</button>
+    <button class="btn btn--shoulder btn--l" data-button="L" aria-label="L shoulder">L</button>
+  </div>
+
+  <div class="chrome chrome--right">
+    <button class="btn btn--shoulder btn--r" data-button="R" aria-label="R shoulder">R</button>
+    <!-- Exit-to-EmulationStation. No data-button: like REBOOT, controller.js opens a
+         two-tap confirm dialog, then sends a momentary EXIT press (button_down/up) that
+         fires the RetroArch exit hotkey, quitting the current game back to the launcher. -->
+    <button class="btn btn--exit" id="exit-btn" aria-label="Exit to EmulationStation">EXIT</button>
+  </div>
+
+  <!-- Reboot the Pi. Not a gamepad button (no data-button) — controller.js opens a
+       two-tap confirm dialog and only then sends {"type":"system","action":"reboot"}.
+       Bottom-right, away from the d-pad/face thumb zones, to avoid accidental taps. -->
+  <button class="btn btn--reboot" id="reboot-btn" aria-label="Reboot the Pi">⏻ REBOOT</button>
+
+  <!-- iOS has no Fullscreen API; the only chrome-free mode is launching the page
+       from the Home Screen as a standalone web app (meta tags above enable it). -->
+  <div id="fs-help" class="fs-help" hidden>
+    <div class="fs-help__card">
+      <p class="fs-help__title">Play full-screen</p>
+      <p>Tap the <strong>Share</strong> button in Safari, choose
+         <strong>Add to Home Screen</strong>, then open
+         <strong>RetroPie Controller</strong> from your Home Screen — it runs
+         full-screen with no address bar.</p>
+      <button class="fs-help__close" id="fs-help-close">Got it</button>
+    </div>
+  </div>
+
+  <!-- Two-tap exit confirmation (reuses the help-overlay look). Shown by the EXIT
+       button; only the Exit action sends the momentary EXIT press. -->
+  <div id="exit-confirm" class="fs-help" hidden>
+    <div class="fs-help__card">
+      <p class="fs-help__title">Exit to EmulationStation?</p>
+      <p>This quits the current game and returns to the RetroPie menu. Unsaved
+         progress will be lost.</p>
+      <div class="fs-help__actions">
+        <button class="fs-help__close" id="exit-cancel">Cancel</button>
+        <button class="fs-help__danger" id="exit-confirm-btn">Exit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Two-tap reboot confirmation (reuses the help-overlay look). Shown by the
+       REBOOT button; only the Reboot action sends the system message. -->
+  <div id="reboot-confirm" class="fs-help" hidden>
+    <div class="fs-help__card">
+      <p class="fs-help__title">Reboot the Pi?</p>
+      <p>This power-cycles the Raspberry Pi and ends the current game. It comes back
+         on its own in under a minute.</p>
+      <div class="fs-help__actions">
+        <button class="fs-help__close" id="reboot-cancel">Cancel</button>
+        <button class="fs-help__danger" id="reboot-confirm-btn">Reboot</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Each control carries data-button matching a logical button in the profile.
+       controller.js maps a touch point to a control via the element under the finger. -->
+  <main class="pad">
+    <section class="pad__dpad" aria-label="D-pad">
+      <button class="btn btn--dir btn--up"    data-button="UP"    aria-label="Up">▲</button>
+      <button class="btn btn--dir btn--left"  data-button="LEFT"  aria-label="Left">◀</button>
+      <button class="btn btn--dir btn--right" data-button="RIGHT" aria-label="Right">▶</button>
+      <button class="btn btn--dir btn--down"  data-button="DOWN"  aria-label="Down">▼</button>
+    </section>
+
+    <section class="pad__face" aria-label="Action buttons">
+      <button class="btn btn--ab btn--b" data-button="B" aria-label="B">B</button>
+      <button class="btn btn--ab btn--a" data-button="A" aria-label="A">A</button>
+    </section>
+
+    <section class="pad__system" aria-label="System buttons">
+      <button class="btn btn--sys" data-button="SELECT" aria-label="Select">SELECT</button>
+      <button class="btn btn--sys" data-button="START"  aria-label="Start">START</button>
+    </section>
+  </main>
+
+  <script src="controller.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+[project]
+name = "retropi-server"
+version = "0.1.0"
+description = "Browser-based iPhone virtual gamepad for RetroPie — Safari → WebSocket → uinput."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pyyaml>=6.0",
+    "qrcode>=7.4",
+    # Real virtual-gamepad backend: a Linux-only C extension. It is platform-gated, so
+    # it is simply skipped on macOS (where the mock driver runs) — `uv sync` never tries
+    # to build it on the Mac. On the Pi it builds against system headers, so that host
+    # needs build-essential + python3-dev + libudev-dev (the installer apt-installs them).
+    "python-uinput>=0.11.2; sys_platform == 'linux'",
+]
+
+# PEP 735 dependency group. `uv sync` installs it by default for local dev/tests;
+# the Pi installer passes `--no-dev` to leave pytest/httpx off the device.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27", # Starlette TestClient transport (incl. websockets)
+]
+
+[tool.uv]
+# This is an application run via `app.py`, not a distributable library — don't build or
+# install the project itself into the env, just resolve and install its dependencies.
+package = false

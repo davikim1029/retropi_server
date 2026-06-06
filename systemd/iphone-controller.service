@@ -1,0 +1,22 @@
+# Reference unit for a manual install. scripts/install.sh generates the effective
+# unit with your actual user, repo path, and env vars — prefer that.
+# Assumes uv is installed (the installer puts it at /usr/local/bin/uv) and that
+# `uv sync` has already built ~/retropi_server/.venv.
+[Unit]
+Description=iPhone Virtual Gamepad Controller Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dkim
+# Adjust if you deploy elsewhere than ~/retropi_server.
+WorkingDirectory=/home/dkim/retropi_server
+ExecStart=/usr/local/bin/uv run --no-sync app.py
+Restart=always
+RestartSec=3
+# uinput device access: dkim must be able to open /dev/uinput (see install notes).
+# SupplementaryGroups=input
+
+[Install]
+WantedBy=multi-user.target

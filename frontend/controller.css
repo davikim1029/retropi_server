@@ -1,0 +1,263 @@
+/* Mobile-first controller layout. Designed for landscape phone play but works in
+   portrait too. The hard rules here exist to make a web page behave like a gamepad:
+   no scrolling, no zoom, no text selection, no iOS tap-callout/flash. */
+
+* {
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;          /* kill scroll/pinch so multi-touch reaches our handlers */
+  background: #1b1b1f;
+  color: #e7e7ea;
+  font-family: -apple-system, system-ui, sans-serif;
+}
+
+.status {
+  position: fixed;
+  top: env(safe-area-inset-top, 0);
+  left: 0;
+  right: 0;
+  text-align: center;
+  padding: 6px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  z-index: 10;
+}
+.status--connecting { background: #6b5d1b; }
+.status--connected  { background: #1f5d2b; }
+.status--disconnected { background: #6b1f24; }
+
+.pad {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr auto;
+  align-items: center;
+  /* Safe-area aware on every edge so the layout clears the notch / home indicator
+     in landscape (left/right insets) as well as the status bar (top). */
+  padding:
+    max(env(safe-area-inset-top, 0), 28px)
+    max(env(safe-area-inset-right, 0), 24px)
+    env(safe-area-inset-bottom, 16px)
+    max(env(safe-area-inset-left, 0), 24px);
+  gap: 12px;
+}
+
+/* --- D-pad: a 3x3 grid with the four arrows on the cross. --- */
+.pad__dpad {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: center;
+  display: grid;
+  grid-template-columns: repeat(3, 64px);
+  grid-template-rows: repeat(3, 64px);
+}
+.btn--up    { grid-column: 2; grid-row: 1; border-radius: 12px 12px 0 0; }
+.btn--left  { grid-column: 1; grid-row: 2; border-radius: 12px 0 0 12px; }
+.btn--right { grid-column: 3; grid-row: 2; border-radius: 0 12px 12px 0; }
+.btn--down  { grid-column: 2; grid-row: 3; border-radius: 0 0 12px 12px; }
+
+/* --- Face buttons A/B, offset like a real pad (A lower-right). --- */
+.pad__face {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.btn--ab {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  font-size: 28px;
+  font-weight: 700;
+}
+.btn--a { transform: translateY(-18px); background: #b23b3b; }
+.btn--b { transform: translateY(18px);  background: #b27a3b; }
+
+/* --- Start / Select centered along the bottom. --- */
+.pad__system {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  justify-self: center;
+  display: flex;
+  gap: 22px;
+}
+.btn--sys {
+  height: 34px;
+  padding: 0 18px;
+  border-radius: 17px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+/* --- Top chrome clusters: fixed to the corners, above the status bar. The left
+       holds the fullscreen toggle + L shoulder; the right holds R + EXIT. The
+       centered connection-status text shows between them. --- */
+.chrome {
+  position: fixed;
+  top: env(safe-area-inset-top, 0);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  z-index: 11;
+}
+.chrome--left  { left: max(env(safe-area-inset-left, 0), 8px); }
+.chrome--right { right: max(env(safe-area-inset-right, 0), 8px); }
+.chrome .btn {
+  height: 28px;
+  border-radius: 0 0 12px 12px;
+  opacity: 0.9;
+}
+
+/* Fullscreen toggle. Uses the Fullscreen API where it exists (Android / desktop /
+   iPad); on iPhone Safari (no Fullscreen API) it opens the Add-to-Home-Screen help.
+   Hidden once running standalone. */
+.btn--fs {
+  width: 38px;
+  padding: 0;
+  font-size: 16px;
+  background: #2f3a4a;
+}
+.btn--fs[hidden] { display: none; }
+
+/* L / R shoulder buttons — flank the corners along the top edge. */
+.btn--shoulder {
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  background: #2f3a4a;
+}
+
+/* Exit-to-EmulationStation (fires the RetroArch exit hotkey). */
+.btn--exit {
+  padding: 0 14px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  background: #3a2f4a;
+}
+
+/* --- Reboot the Pi: bottom-right, clear of the thumbs. Muted danger color; a
+       two-tap confirm dialog (controller.js) guards against accidental taps. --- */
+.btn--reboot {
+  position: fixed;
+  bottom: max(env(safe-area-inset-bottom, 0), 8px);
+  right: max(env(safe-area-inset-right, 0), 8px);
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #ffd9df;
+  background: #5a2330;
+  opacity: 0.92;
+  z-index: 11;
+}
+
+/* --- Add-to-Home-Screen help overlay: the only chrome-free path on iPhone. --- */
+.fs-help {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.66);
+}
+.fs-help[hidden] { display: none; }
+.fs-help__card {
+  max-width: 320px;
+  background: #26262c;
+  border-radius: 16px;
+  padding: 20px;
+  text-align: center;
+  line-height: 1.45;
+  font-size: 15px;
+}
+.fs-help__title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+}
+.fs-help p { margin: 0 0 14px; }
+.fs-help__close {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 22px;
+  font: inherit;
+  font-weight: 600;
+  color: #f2f2f4;
+  background: #3a6df0;
+}
+/* Side-by-side actions for the reboot confirm dialog. */
+.fs-help__actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+.fs-help__danger {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 22px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background: #c0392b;
+}
+
+/* --- Shared button look + pressed feedback. --- */
+.btn {
+  border: none;
+  color: #f2f2f4;
+  background: #34343c;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+.btn--dir { font-size: 20px; }
+.btn.is-pressed {
+  filter: brightness(1.5);
+  transform-origin: center;
+}
+.btn--a.is-pressed { transform: translateY(-18px) scale(0.92); }
+.btn--b.is-pressed { transform: translateY(18px) scale(0.92); }
+
+/* --- Narrow screens (phones in portrait): each grid column is only half the
+       width, so shrink the d-pad and A/B cluster to fit instead of letting the
+       rightmost (A) button clip off the screen edge. Landscape phones are
+       >= 667px wide and keep the full-size controls above. --- */
+@media (max-width: 430px) {
+  .pad {
+    padding-left: max(env(safe-area-inset-left, 0), 12px);
+    padding-right: max(env(safe-area-inset-right, 0), 12px);
+    gap: 8px;
+  }
+  .pad__dpad {
+    grid-template-columns: repeat(3, 56px);
+    grid-template-rows: repeat(3, 56px);
+  }
+  .pad__face { gap: 16px; }
+  .btn--ab {
+    width: 72px;
+    height: 72px;
+    font-size: 24px;
+  }
+}

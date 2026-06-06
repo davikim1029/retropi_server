@@ -1,0 +1,36 @@
+# Game Boy controller profile.
+#
+# Each logical button maps to a Linux input event so profiles stay declarative and
+# swappable without touching driver code:
+#   type: key  -> a digital gamepad button (BTN_*); emitted as 1 (down) / 0 (up).
+#   type: hat  -> a direction on a hat axis (ABS_HAT0X / ABS_HAT0Y); the driver
+#                 resolves the axis value from the pressed booleans:
+#                 value = (POS pressed ? 1 : 0) - (NEG pressed ? 1 : 0)
+#                 so opposing presses (UP+DOWN) cancel to 0.
+#
+# `code`/`axis` are python-uinput constant names (resolved by profiles/loader.py).
+name: gameboy
+display_name: "Game Boy"
+buttons:
+  A:      { type: key, code: BTN_SOUTH }
+  B:      { type: key, code: BTN_EAST }
+  L:      { type: key, code: BTN_TL }     # shoulder; no-op on real GB cores, used by SNES/menus
+  R:      { type: key, code: BTN_TR }     # shoulder
+  START:  { type: key, code: BTN_START }
+  SELECT: { type: key, code: BTN_SELECT }
+  UP:     { type: hat, axis: HAT0Y, value: -1 }
+  DOWN:   { type: hat, axis: HAT0Y, value: 1 }
+  LEFT:   { type: hat, axis: HAT0X, value: -1 }
+  RIGHT:  { type: hat, axis: HAT0X, value: 1 }
+  EXIT:   { type: key, code: BTN_MODE }   # exit-to-EmulationStation hotkey (see `hotkeys`)
+
+# RetroArch hotkeys: action -> a button declared above. The EXIT button is wired as
+# BOTH the hotkey-enable and the exit-emulator trigger, so a single tap quits the game
+# back to EmulationStation. RetroPie's global retroarch.cfg defines an enable-hotkey,
+# which would otherwise gate joypad hotkeys off; pointing enable + exit at the same
+# button satisfies that gate and fires exit in one press. EXIT has a non-RetroPad name
+# so it is NOT emitted as a normal game bind — it only acts as a hotkey, never reaching
+# the running game. (autoconfig.py translates these to input_<action>_btn lines.)
+hotkeys:
+  enable: EXIT   # -> input_enable_hotkey_btn
+  exit:   EXIT   # -> input_exit_emulator_btn
