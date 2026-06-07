@@ -43,7 +43,7 @@ html, body {
   width: 100%;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: 1fr auto;   /* row 1: d-pad + face, row 2: start/select */
   align-items: center;
   /* Safe-area aware on every edge so the layout clears the notch / home indicator
      in landscape (left/right insets) as well as the status bar (top). */
@@ -53,6 +53,20 @@ html, body {
     env(safe-area-inset-bottom, 16px)
     max(env(safe-area-inset-left, 0), 24px);
   gap: 12px;
+}
+
+/* --- L / R shoulders: a centered banner near the top of the pad, just below the
+       connection-status strip. Absolutely positioned + out of flow, so it never
+       shifts the d-pad / A-B layout, which stays exactly as the original below. --- */
+.pad__shoulders {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 36px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  z-index: 5;
 }
 
 /* --- D-pad: a 3x3 grid with the four arrows on the cross. --- */
@@ -105,8 +119,8 @@ html, body {
 }
 
 /* --- Top chrome clusters: fixed to the corners, above the status bar. The left
-       holds the fullscreen toggle + L shoulder; the right holds R + EXIT. The
-       centered connection-status text shows between them. --- */
+       holds the fullscreen toggle; the right holds EXIT. The centered
+       connection-status text shows between them. --- */
 .chrome {
   position: fixed;
   top: env(safe-area-inset-top, 0);
@@ -134,10 +148,13 @@ html, body {
 }
 .btn--fs[hidden] { display: none; }
 
-/* L / R shoulder buttons — flank the corners along the top edge. */
+/* L / R shoulder buttons — the centered .pad__shoulders banner near the top. */
 .btn--shoulder {
-  padding: 0 16px;
-  font-size: 13px;
+  height: 40px;
+  min-width: 104px;
+  padding: 0 18px;
+  border-radius: 12px;
+  font-size: 15px;
   font-weight: 700;
   letter-spacing: 0.06em;
   background: #2f3a4a;

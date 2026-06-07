@@ -48,7 +48,18 @@ static asset serving, QR render, autoconfig file written to a target dir on star
 into a sample `es_input.cfg`. The generated autoconfig + es_input joystick block match the
 known-good files captured from the Pi (button ids a=0/b=1, hat bitmask, GUID); after adding L/R the
 indices shifted to a=0/b=1/l=2/r=3/select=4/start=5, EXIT(BTN_MODE) hotkey=6 — all derived, regenerated
-on startup. **Not yet retested on the Pi** (EXIT rename + L/R + reboot need a redeploy).
+on startup.
+
+**Deployed + verified on the Pi (2026-06-06):** rsync to `/home/dkim/GitHub/retropi_server` +
+`./scripts/install.sh` ran clean (venv rebuilt, `python-uinput` compiled on CPython 3.12.13). Service
+**active**, `/health` → `"driver":"uinput"`; `iPhone Virtual Gamepad` device present (`event1 js0`);
+the on-Pi RetroArch autoconfig shows the new indices (a=0/b=1/l=2/r=3/select=4/start=5, hotkey=6);
+es_input merged into both ES config paths; reboot sudoers rule
+`/etc/sudoers.d/iphone-controller-reboot` written, `visudo`-validated, and `sudo -n -l` confirms
+`dkim` has NOPASSWD on `/usr/bin/systemctl reboot`. **Still untested on hardware** (Claude won't
+trigger them remotely): the iPhone UI layout (L/R/EXIT/REBOOT placement), EXIT→quit in a live game,
+and an actual REBOOT. Reload the page on the iPhone (static files served live) and relaunch a game /
+restart EmulationStation to test.
 
 **Verified end-to-end on the Pi (2026-06-03):** installer ran clean via SSH (passwordless sudo);
 uv fetched managed CPython 3.12.13, compiled `python-uinput` against it; the systemd service is
@@ -144,10 +155,11 @@ pytest.ini  .gitignore  CLAUDE.md   resume.md (this file)
   non-interactively over SSH), user **`dkim`**, hostname `raspberrypi.local`. OS is **Raspberry Pi
   OS Bullseye, aarch64, system Python 3.9.2** — too old for the code's 3.10+ syntax, so uv fetches
   a **managed CPython 3.12** at install. Service runs as `dkim`. Default port **8080**.
-  Repo lives at `~/GitHub/retropi_server/retropi_server/` (note the doubled dir).
+  Repo lives at **`/home/dkim/GitHub/retropi_server`** (single dir — confirmed via the systemd
+  unit's `WorkingDirectory` on 2026-06-06; the earlier "doubled dir" note was wrong).
 - **RetroPie joypad dir (default):** `/opt/retropie/configs/all/retroarch-joypads`.
-- Deploy via `rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi:~/GitHub/retropi_server/retropi_server/`,
-  then `ssh dkim@raspberrypi 'cd ~/GitHub/retropi_server/retropi_server && ./scripts/install.sh'`.
+- Deploy via `rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi:~/GitHub/retropi_server/`,
+  then `ssh dkim@raspberrypi 'cd ~/GitHub/retropi_server && ./scripts/install.sh'`.
 
 ---
 
@@ -169,19 +181,24 @@ pytest.ini  .gitignore  CLAUDE.md   resume.md (this file)
 
 ## Backlog / next steps (pick up here)
 
-1. **Appliance boot + new input features — confirm on the Pi (redeploy needed):** auto-boot to
-   EmulationStation is staged (see Status snapshot). Ask the user how the reboot went: did ES appear
-   on the TV? The ES pad-menu mapping (`es_input.cfg` joystick), the jstest/evtest install, the
-   EXIT exit-hotkey, the new **L/R shoulders**, and the **REBOOT button** are now **in code**
-   (2026-06-06) but need a redeploy to land on the Pi: `rsync` + `./scripts/install.sh`, then
-   **restart EmulationStation** (it reads `es_input.cfg` at launch) and relaunch a game to test
-   EXIT→quit. The exit hotkey uses same-button enable+exit (`BTN_MODE`, now **index 6** after L/R
-   shifted the numbering) because RetroPie's global `retroarch.cfg` has `input_enable_hotkey = "num1"`
-   with no joypad enable btn — verified by reading the Pi's config a prior session. If EXIT doesn't
-   quit, fallback is a Select+Start combo. **Test the REBOOT button on the Pi**: two-tap confirm →
-   the Pi should power-cycle; verify `install.sh` wrote `/etc/sudoers.d/iphone-controller-reboot`
-   and `sudo -n systemctl reboot` works as `dkim`. New autoconfig indices: a=0/b=1/l=2/r=3/select=4/
-   start=5. Multi-touch and A/B order already confirmed on hardware.
+1. **Hardware test the new features on the iPhone + TV (DEPLOYED 2026-06-06, code is live on the
+   Pi).** The redeploy is done and server-side verified (see Status snapshot); what remains is
+   on-device testing the user must do:
+   - **Reload the page on the iPhone** (static files are served live — no redeploy needed for
+     frontend tweaks) and eyeball the layout: L/R shoulders top corners, EXIT top-right, REBOOT
+     bottom-right. Adjust CSS positions if cramped.
+   - **EXIT→quit:** relaunch a game, tap EXIT → confirm dialog → Exit; it should quit to ES. The
+     exit hotkey is same-button enable+exit (`BTN_MODE`, now **index 6** after L/R shifted the
+     numbering) because RetroPie's global `retroarch.cfg` has `input_enable_hotkey = "num1"` with no
+     joypad enable btn. If EXIT doesn't quit, fallback is a Select+Start combo, or bump
+     `EXIT_HOLD_MS` in `controller.js`.
+   - **REBOOT:** two-tap confirm → the Pi should power-cycle (sudoers rule + `sudo -n -l` already
+     verified server-side; Claude did NOT trigger an actual reboot).
+   - **Menu nav with the pad:** the ES joystick mapping was merged into both `es_input.cfg` paths;
+     **restart EmulationStation** (it reads the file only at launch) to pick it up.
+   - Also still open from before: did the appliance auto-boot to ES on the TV actually work?
+   New autoconfig indices live on the Pi: a=0/b=1/l=2/r=3/select=4/start=5. Multi-touch + A/B order
+   confirmed on hardware in a prior session.
 2. **NES / SNES profiles** — new YAML files. SNES adds X/Y/L/R → needs `BTN_NORTH`/`BTN_WEST`/
    `BTN_TL`/`BTN_TR` (already present in `BTN_CODES`). Decide how the client selects a profile
    (currently startup-fixed via `RPC_PROFILE`; the `hello.controller` field is accepted but the

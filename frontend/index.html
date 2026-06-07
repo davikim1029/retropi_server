@@ -15,19 +15,17 @@
     Connecting…
   </div>
 
-  <!-- Top chrome, pinned to the corners clear of the thumb zones. Left cluster:
-       fullscreen toggle (UI chrome, no data-button) + the L shoulder. Right cluster:
-       the R shoulder + EXIT. L/R/EXIT carry data-button (real gamepad buttons). -->
+  <!-- Top chrome, pinned to the corners clear of the thumb zones. Left: the
+       fullscreen toggle (UI chrome, no data-button). Right: EXIT (data-button).
+       The L/R shoulders live in the pad below, on its top corners. -->
   <div class="chrome chrome--left">
     <!-- Fullscreen toggle. On iPhone Safari (no Fullscreen API) it opens the
          Add-to-Home-Screen help; elsewhere it toggles the real Fullscreen API.
          controller.js hides it when the page is already running standalone. -->
     <button class="btn btn--fs" id="fullscreen-btn" aria-label="Fullscreen">⛶</button>
-    <button class="btn btn--shoulder btn--l" data-button="L" aria-label="L shoulder">L</button>
   </div>
 
   <div class="chrome chrome--right">
-    <button class="btn btn--shoulder btn--r" data-button="R" aria-label="R shoulder">R</button>
     <!-- Exit-to-EmulationStation. No data-button: like REBOOT, controller.js opens a
          two-tap confirm dialog, then sends a momentary EXIT press (button_down/up) that
          fires the RetroArch exit hotkey, quitting the current game back to the launcher. -->
@@ -83,6 +81,14 @@
   <!-- Each control carries data-button matching a logical button in the profile.
        controller.js maps a touch point to a control via the element under the finger. -->
   <main class="pad">
+    <!-- L/R as a centered banner near the top of the pad. Absolutely positioned so it
+         never shifts the d-pad / A-B layout below, which stays exactly as the original.
+         data-button -> real gamepad buttons. -->
+    <div class="pad__shoulders" aria-label="Shoulder buttons">
+      <button class="btn btn--shoulder btn--l" data-button="L" aria-label="L shoulder">L</button>
+      <button class="btn btn--shoulder btn--r" data-button="R" aria-label="R shoulder">R</button>
+    </div>
+
     <section class="pad__dpad" aria-label="D-pad">
       <button class="btn btn--dir btn--up"    data-button="UP"    aria-label="Up">▲</button>
       <button class="btn btn--dir btn--left"  data-button="LEFT"  aria-label="Left">◀</button>

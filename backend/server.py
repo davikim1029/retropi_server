@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import Scope
 
 from backend.api.ws import websocket_endpoint
 from backend.config import FRONTEND_DIR, settings
@@ -27,6 +28,23 @@ from backend.profiles.loader import load_profile
 from backend.sessions.manager import SessionManager
 
 logger = logging.getLogger(__name__)
+
+
+class _NoCacheStaticFiles(StaticFiles):
+    """Serve the frontend with revalidate-always caching.
+
+    There is no client build step — we edit index.html / controller.css /
+    controller.js in place and rsync them onto the Pi — so without this, iOS
+    Safari happily renders a stale stylesheet against fresh HTML (e.g. a new
+    element falls back to unstyled layout). `no-cache` forces a conditional
+    request on every load: cheap 304s when nothing changed (the etag /
+    last-modified are still sent), fresh bytes the instant a file changes.
+    """
+
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 async def _reaper_loop(app: FastAPI) -> None:
@@ -100,5 +118,5 @@ def create_app() -> FastAPI:
     # at "/" doesn't shadow it (Starlette matches routes in registration order).
     app.add_api_websocket_route("/ws", websocket_endpoint)
 
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+    app.mount("/", _NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
     return app
