@@ -242,7 +242,7 @@ summary() {
   echo
   log "Install complete."
   echo "  Service : ${SERVICE_NAME} (${active})"
-  echo "  Connect : http://${ip:-<pi-ip>}:${PORT}    or    http://${hostn}.local:${PORT}"
+  echo "  Connect : http://${ip:-<pi-ip>}:${PORT}    or    http://${hostn}.local:${PORT} or http://gamepad.local:${PORT}"
   echo "  QR code : sudo journalctl -u ${SERVICE_NAME} -b --no-pager | tail -n 40"
   echo "  Follow  : sudo journalctl -u ${SERVICE_NAME} -f"
   echo

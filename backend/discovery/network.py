@@ -37,7 +37,7 @@ def controller_urls(port: int) -> list[str]:
     hostname = socket.gethostname().split(".")[0]
     if hostname:
         urls.append(f"http://{hostname}.local:{port}")
-    urls.append(f"http://gamepad:{port}")
+    urls.append(f"http://gamepad.local:{port}")
     return urls
 
 
