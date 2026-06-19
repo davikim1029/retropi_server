@@ -19,6 +19,10 @@
        fullscreen toggle (UI chrome, no data-button). Right: EXIT (data-button).
        The L/R shoulders live in the pad below, on its top corners. -->
   <div class="chrome chrome--left">
+    <!-- Stream-mode toggle. Switches between the full-screen pad and the split view
+         (live game video up top, controls below). controller.js persists the choice
+         and only then connects the MJPEG stream — video is independent of the pad. -->
+    <button class="btn btn--mode" id="mode-btn" aria-label="Toggle video" aria-pressed="false">📺</button>
     <!-- Fullscreen toggle. On iPhone Safari (no Fullscreen API) it opens the
          Add-to-Home-Screen help; elsewhere it toggles the real Fullscreen API.
          controller.js hides it when the page is already running standalone. -->
@@ -77,6 +81,16 @@
       </div>
     </div>
   </div>
+
+  <!-- Stream-mode video panel: the top half in split view. Holds the live MJPEG
+       <img> fed by /video/stream.mjpeg. Inert (pointer-events:none) and only shown
+       when body.mode-stream is set, so the default full-screen pad is untouched. If
+       capture is off/failing the <img> errors and we show the placeholder below —
+       the controller keeps working regardless (the whole point of the split). -->
+  <section id="stream-panel" class="stream-panel" hidden aria-hidden="true">
+    <img id="stream-img" class="stream-img" alt="Live game video" />
+    <p id="stream-msg" class="stream-msg" hidden>Video unavailable</p>
+  </section>
 
   <!-- Each control carries data-button matching a logical button in the profile.
        controller.js maps a touch point to a control via the element under the finger. -->

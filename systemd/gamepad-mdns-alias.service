@@ -1,0 +1,24 @@
+# Reference unit for a manual install. scripts/install.sh generates the effective
+# unit (it bakes in the absolute avahi-publish path) — prefer that.
+#
+# Advertises gamepad.local as an extra mDNS alias so phones can reach the controller at
+# http://gamepad.local:8080 in addition to <hostname>.local. avahi-daemon (which answers
+# the Pi's own <hostname>.local) ships with Raspberry Pi OS; this needs avahi-utils for
+# avahi-publish: sudo apt-get install -y avahi-utils.
+[Unit]
+Description=Publish gamepad.local as an mDNS alias for the iPhone Virtual Gamepad
+After=network-online.target avahi-daemon.service
+Wants=network-online.target avahi-daemon.service
+
+[Service]
+Type=simple
+# -a publishes an address (A) record; -R skips the reverse (PTR) entry; -f retries instead
+# of failing if avahi-daemon isn't up yet. The loop blocks until 'hostname -I' yields an IP
+# (handles the post-boot race), then publishes the Pi's first address. The IP is resolved
+# fresh on each start, so reboots self-correct; a live IP change needs a manual restart.
+ExecStart=/bin/sh -c 'ip=""; while [ -z "$ip" ]; do ip=$(hostname -I | cut -d" " -f1); [ -z "$ip" ] && sleep 1; done; exec /usr/bin/avahi-publish -a -R -f gamepad.local "$ip"'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

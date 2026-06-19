@@ -5,7 +5,7 @@
 > then continue from **Backlog / next steps** below. The original spec is
 > `iPhone_RetroPie_Controller_Production_Design.md` (the "PEDD").
 
-_Last updated: 2026-06-06._
+_Last updated: 2026-06-19._
 
 ---
 
@@ -41,7 +41,32 @@ Flow: `iPhone Safari → WebSocket → FastAPI → InputStateEngine → GamepadD
   Mac/mock/`RPC_ALLOW_REBOOT=0`); `install.sh` writes a narrow `/etc/sudoers.d` NOPASSWD rule.
 - One-shot Pi installer (`scripts/install.sh`): now also apt-installs `joystick`/`jstest` + `evtest`,
   merges the ES joystick mapping into `es_input.cfg`, and grants the reboot sudoers rule.
-- 30 passing tests on the Mac (mock driver).
+- **`gamepad.local` mDNS alias (2026-06-09, not yet hardware-tested):** the startup URL list
+  (`backend/discovery/network.py`) advertises `http://gamepad.local:8080` alongside the IP and
+  `<hostname>.local`, but that name only *resolves* because `install.sh` now installs a second
+  systemd unit `gamepad-mdns-alias.service` (`systemd/gamepad-mdns-alias.service` is the reference)
+  that runs `avahi-publish -a -R -f gamepad.local <lan-ip>` (needs `avahi-utils`, also apt-installed).
+  The unit waits for DHCP to assign an IP then publishes it, so **reboots self-correct** the IP; a
+  live IP change without a reboot needs `systemctl restart gamepad-mdns-alias`. Idempotent re-run.
+  Keep the literal `gamepad.local` in `network.py` and `install.sh` in sync.
+- **Stream mode (2026-06-19, mock-verified; on-Pi capture pending hardware test):** an optional
+  split-screen browser layout — top half live game video, bottom half the existing pad. Opt-in
+  (`RPC_VIDEO_ENABLED`, default off) and **fully decoupled from the controller**: new package
+  `backend/video/` (`VideoSource` ABC + `create_source()`, `JpegStreamSplitter`, `mock_source.py`
+  cycling bundled `assets/*.jpg`, `ffmpeg_source.py` supervised subprocess) + new HTTP routes
+  `backend/api/video.py` (`GET /video/stream.mjpeg` multipart MJPEG, `GET /video/status`). Transport
+  is **MJPEG over HTTP** rendered by a plain `<img>` (no build step). Frontend adds a 📺 toggle +
+  `body.mode-stream` split layout (persisted in `localStorage`, honors `?mode=stream`); default pad
+  layout unchanged. Capture defaults to `kmsgrab` (correct for the Pi's full-KMS `vc4-kms-v3d`;
+  read-only scanout grab → **HDMI keeps working**); the whole ffmpeg command is overridable via
+  `RPC_VIDEO_FFMPEG_CMD` for on-hardware tuning. `install.sh` gains an opt-in `setup_video` (ffmpeg +
+  `setcap cap_sys_admin` for kmsgrab + `video`/`render` groups + `RPC_VIDEO_*` in the unit).
+  **Verified on the Mac:** `/health` shows `"video":"mock"`, `/video/status` + `/video/stream.mjpeg`
+  serve real multipart JPEG frames, served page has the toggle. **Untested on hardware:** the actual
+  kmsgrab pipeline (which `/dev/dri/cardN`, the `hwdownload,format=` for VC4), and the on-iPhone split
+  layout.
+- 41 passing tests on the Mac (mock driver) — added `test_video_source.py` (splitter + mock) and
+  `test_video_api.py` (routes + multipart stream).
 
 **Verified locally on the Mac:** `pytest` (30/30 on uv-managed 3.12), server boot, `/health`,
 static asset serving, QR render, autoconfig file written to a target dir on startup, es_input merge
@@ -92,6 +117,7 @@ backend/
   server.py                         # FastAPI factory; lifespan opens/closes driver, writes autoconfig,
                                      #   starts session reaper, /health, static mount AFTER /ws
   api/ws.py                         # WebSocket protocol (hello/accepted, button_down/up, heartbeat, system)
+  api/video.py                      # GET /video/stream.mjpeg (multipart MJPEG) + /video/status (stream mode)
   input/
     state.py                        # InputStateEngine — last-write-wins per button (correctness core)
     driver.py                       # GamepadDriver ABC + BaseGamepadDriver + create_driver() + channels
@@ -105,20 +131,27 @@ backend/
   sessions/manager.py               # sessions, inactivity reaper, fail-safe release_all
   discovery/network.py              # LAN IP + ASCII QR
   system/control.py                 # request_reboot() — guarded `sudo -n systemctl reboot` (Pi only)
+  video/                            # OPTIONAL stream mode (off by default), decoupled from input:
+    source.py                       #   VideoSource ABC + create_source() + JpegStreamSplitter
+    mock_source.py                  #   cycles bundled assets/*.jpg (Mac/tests/RPC_VIDEO_CAPTURE=test)
+    ffmpeg_source.py                #   supervised ffmpeg capture (kmsgrab default); RPC_VIDEO_FFMPEG_CMD override
+    assets/                         #   bundled placeholder JPEGs for the mock
 frontend/
-  index.html / controller.css / controller.js   # multi-touch pad (+ L/R/EXIT/REBOOT), deltas, reconnect
+  index.html / controller.css / controller.js   # multi-touch pad (+ L/R/EXIT/REBOOT + 📺 stream mode), deltas, reconnect
 scripts/
-  install.sh                        # one-shot Pi installer (PEDD §15); apt jstest/evtest + es_input merge
+  install.sh                        # one-shot Pi installer (PEDD §15); apt jstest/evtest/avahi-utils,
+                                     #   es_input merge, reboot sudoers, gamepad.local mDNS alias unit
   generate_autoconfig.py            # CLI to print/install the RetroArch autoconfig
   generate_es_input.py              # CLI to print/merge the ES joystick mapping
 systemd/iphone-controller.service   # reference unit (installer generates the real one)
+systemd/gamepad-mdns-alias.service  # reference unit: avahi-publish gamepad.local alias (installer generates it)
 tests/                              # test_input_state, test_profiles, test_driver_mock, test_websocket,
-                                     #   test_autoconfig, test_es_input  (25 tests)
+                                     #   test_autoconfig, test_es_input, test_video_source, test_video_api  (41 tests)
 docs/SETUP.md                       # the runbook
 pyproject.toml                      # deps (uv-managed); python-uinput platform-gated to Linux
 uv.lock                             # pinned, reproducible resolution (commit it)
 .python-version                     # pins Python 3.12 (code uses 3.10+ syntax; Pi system is 3.9)
-pytest.ini  .gitignore  CLAUDE.md   resume.md (this file)
+pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
 ```
 
 ---
@@ -150,7 +183,7 @@ pytest.ini  .gitignore  CLAUDE.md   resume.md (this file)
 
 - **Dev machine:** macOS (darwin). Repo at `/Users/daviskim/Documents/GitHub/retropi_server`.
   Deps via **uv** (`uv sync` builds `.venv`). Python is pinned to **3.12** via `.python-version`
-  (uv-managed; system `python3` is 3.14.x but unused for the project). Not a git repo yet.
+  (uv-managed; system `python3` is 3.14.x but unused for the project). Git repo, branch `main`.
 - **Target Pi:** `ssh dkim@raspberrypi` (**key auth + passwordless sudo** — installer runs
   non-interactively over SSH), user **`dkim`**, hostname `raspberrypi.local`. OS is **Raspberry Pi
   OS Bullseye, aarch64, system Python 3.9.2** — too old for the code's 3.10+ syntax, so uv fetches
@@ -181,6 +214,19 @@ pytest.ini  .gitignore  CLAUDE.md   resume.md (this file)
 
 ## Backlog / next steps (pick up here)
 
+0. **Validate stream mode on the Pi (NEW 2026-06-19 — code written + mock-verified, NOT yet deployed).**
+   rsync + re-run `install.sh` with `RPC_VIDEO_ENABLED=1`. Then, with a game (or ES) on screen:
+   - From a laptop, `curl http://raspberrypi.local:8080/video/status` (expect `running:true`) and open
+     `/video/stream.mjpeg` in a browser — and confirm the **TV still shows the game** (HDMI unaffected).
+   - On the iPhone, tap 📺 → top-half video + bottom-half working pad.
+   - If kmsgrab yields nothing, iterate the pipeline via `RPC_VIDEO_FFMPEG_CMD` **without redeploying**:
+     check which card is the display (`ls -l /dev/dri`, `cat /sys/class/drm/*/status`) and try
+     `format=nv12`/`bgr0`; `journalctl -u iphone-controller -f` shows ffmpeg's stderr. The controller
+     must keep working throughout (that's the whole point of the module split). `RPC_VIDEO_CAPTURE=test`
+     forces the bundled-frame mock on the Pi to prove transport independent of capture.
+   Probed Pi facts: Pi **3B**, full KMS (`vc4-kms-v3d`), ffmpeg 4.3.9 has kmsgrab, fb is `vc4drmfb`
+   1920×1080 (so `/dev/fb0` likely shows the console, not the game — kmsgrab is the right path).
+
 1. **Hardware test the new features on the iPhone + TV (DEPLOYED 2026-06-06, code is live on the
    Pi).** The redeploy is done and server-side verified (see Status snapshot); what remains is
    on-device testing the user must do:
@@ -196,6 +242,10 @@ pytest.ini  .gitignore  CLAUDE.md   resume.md (this file)
      verified server-side; Claude did NOT trigger an actual reboot).
    - **Menu nav with the pad:** the ES joystick mapping was merged into both `es_input.cfg` paths;
      **restart EmulationStation** (it reads the file only at launch) to pick it up.
+   - **`gamepad.local` (2026-06-09, redeploy needed — installer change):** rsync + re-run
+     `install.sh` so `avahi-utils` + the `gamepad-mdns-alias` unit land, then from the iPhone open
+     `http://gamepad.local:8080`. Verify on the Pi with `avahi-resolve -n gamepad.local` and
+     `systemctl status gamepad-mdns-alias`.
    - Also still open from before: did the appliance auto-boot to ES on the TV actually work?
    New autoconfig indices live on the Pi: a=0/b=1/l=2/r=3/select=4/start=5. Multi-touch + A/B order
    confirmed on hardware in a prior session.

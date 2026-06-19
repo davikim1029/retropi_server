@@ -148,6 +148,67 @@ html, body {
 }
 .btn--fs[hidden] { display: none; }
 
+/* Stream-mode toggle, sits left of the fullscreen button. */
+.btn--mode {
+  width: 38px;
+  padding: 0;
+  font-size: 16px;
+  background: #2f3a4a;
+}
+.btn--mode[aria-pressed="true"] { background: #1f5d2b; }
+
+/* --- Split "stream mode": live game video up top, controller below. All scoped to
+       body.mode-stream so the default full-screen pad layout is byte-for-byte unchanged
+       when the mode is off. --- */
+.stream-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50vh;
+  display: none;                 /* shown only via body.mode-stream below */
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  z-index: 8;                    /* under the fixed chrome/status, over the pad */
+  pointer-events: none;          /* never intercept touches meant for nothing */
+  padding-top: env(safe-area-inset-top, 0);
+}
+.stream-panel[hidden] { display: none; }
+body.mode-stream .stream-panel { display: flex; }
+.stream-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;           /* letterbox; never crop or stretch the game */
+  display: block;
+}
+.stream-msg {
+  position: absolute;
+  color: #9aa0ad;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.stream-msg[hidden] { display: none; }
+
+/* Push the pad into the bottom half and shrink the controls so the d-pad + face
+   cluster fit comfortably in 50vh (independent of the portrait width breakpoint). */
+body.mode-stream .pad {
+  height: 50vh;
+  margin-top: 50vh;
+  padding-top: 18px;
+}
+body.mode-stream .pad__shoulders { top: 6px; }
+body.mode-stream .pad__dpad {
+  grid-template-columns: repeat(3, 52px);
+  grid-template-rows: repeat(3, 52px);
+}
+body.mode-stream .pad__face { gap: 14px; }
+body.mode-stream .btn--ab {
+  width: 64px;
+  height: 64px;
+  font-size: 22px;
+}
+
 /* L / R shoulder buttons — the centered .pad__shoulders banner near the top. */
 .btn--shoulder {
   height: 40px;

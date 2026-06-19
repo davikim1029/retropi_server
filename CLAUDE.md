@@ -9,15 +9,21 @@ auto-reconnect, QR discovery, and `/health`. The design spec
 (`iPhone_RetroPie_Controller_Production_Design.md`, the "PEDD") remains the source of truth for
 the broader vision; keep it in sync when design decisions change.
 
+Also implemented: an optional **"stream mode"** (live game video next to the controls in the
+browser) — see *Live video / stream mode* below. It is **off by default**, decoupled from the
+input path, and **mock-verified on the Mac**; the real on-Pi capture pipeline is **pending
+hardware validation**.
+
 **Deferred (not yet built):** the security model (pairing token, origin validation, rate
-limiting — PEDD §10), NES/SNES profiles, and load tests. The code is structured so these layer on
-without rework.
+limiting — PEDD §10) — note this also leaves the video stream open to any LAN device; NES/SNES
+profiles; load tests; and a WebRTC/H.264 low-latency video path. The code is structured so these
+layer on without rework.
 
 Layout (`backend/` mirrors PEDD §21):
 
 ```
 app.py                      # entrypoint (python3 app.py / systemd)
-backend/ api/ sessions/ input/ profiles/ discovery/ system/  config.py  server.py
+backend/ api/ sessions/ input/ profiles/ discovery/ system/ video/  config.py  server.py
 frontend/ index.html controller.css controller.js
 tests/  systemd/
 pyproject.toml  uv.lock
@@ -113,6 +119,45 @@ from the Pi; override with `--guid`). Unlike autoconfig, this is **not** written
 (ES owns the file and only reads it at launch) — `scripts/generate_es_input.py` does it, run by
 `install.sh` against the standard ES config paths.
 
+### Live video / stream mode (optional, off by default)
+
+A **second browser layout** ("stream mode") shows the game on the phone: top half live video, bottom
+half the existing pad. It is opt-in (`RPC_VIDEO_ENABLED`, default off) and **deliberately decoupled
+from the controller** — separate package (`backend/video/`), separate HTTP routes
+(`backend/api/video.py`), separate supervised subprocess — so if capture misbehaves the WebSocket
+gamepad is untouched and the two diagnose independently (open `/video/stream.mjpeg` alone). Transport
+is **MJPEG over HTTP** (`multipart/x-mixed-replace`), rendered by a plain `<img>` in mobile Safari —
+no client build step, no JS player.
+
+`backend/video/` mirrors the `GamepadDriver` pattern: a `VideoSource` ABC + `create_source()` factory
+(`source.py`) with two backends — `MockVideoSource` (`mock_source.py`, cycles the bundled JPEGs in
+`backend/video/assets/`; used on macOS, in tests, under `RPC_FORCE_MOCK`, or `RPC_VIDEO_CAPTURE=test`)
+and `FfmpegVideoSource` (`ffmpeg_source.py`, the real Pi capture). The shared correctness core is
+`JpegStreamSplitter` (reassembles ffmpeg's MJPEG stdout into whole JPEG frames). Sources hold only the
+**latest** frame + a sequence number, so subscribers are **newest-wins** (a slow phone never
+back-pressures capture, analogous to input's last-write-wins). `server.py`'s lifespan starts/stops the
+source guarded in a try/except (a video failure leaves `app.state.video = None` and never takes the
+controller down); `/health` reports the backend in `"video"`, and `/video/status` gives
+enabled/running/has-frames for diagnosis. Routes are registered **before** the static mount, like
+`/ws` and `/health`.
+
+**Capture on the Pi:** default `RPC_VIDEO_CAPTURE=kmsgrab` — correct for the Pi's full-KMS stack
+(`vc4-kms-v3d`). kmsgrab maps the framebuffer **already scanned out to HDMI, read-only**, and never
+becomes DRM master, so **the TV keeps working** whether or not anyone streams (and regardless of plain
+pad vs split view). `FfmpegVideoSource` **supervises** ffmpeg (relaunch with backoff on crash). The
+exact VC4 pipeline (`hwdownload,format=…`, which `/dev/dri/cardN`) may need tuning on hardware, so the
+**whole ffmpeg command is overridable** via `RPC_VIDEO_FFMPEG_CMD` (must end `… -f mjpeg pipe:1`) —
+iterate on the Pi without code changes. `RPC_VIDEO_CAPTURE=fbdev` is a diagnostic fallback (under full
+KMS `/dev/fb0` usually shows the console, not the game). kmsgrab needs `CAP_SYS_ADMIN`; the service is
+non-root, so `install.sh` (only when `RPC_VIDEO_ENABLED=1`) apt-installs ffmpeg, `setcap
+cap_sys_admin+ep`s the ffmpeg binary, adds the user to `video`/`render`, and wires `RPC_VIDEO_*` into
+the unit — all opt-in, like the reboot sudoers rule.
+
+**Frontend:** the split view is additive and scoped to `body.mode-stream` (the default full-screen pad
+is unchanged). A 📺 toggle in the top-left chrome flips it; the choice persists in `localStorage` and
+honors `?mode=stream`. The `<img>` points at `/video/stream.mjpeg`; on error it shows a small "Video
+unavailable" placeholder and retries (so ffmpeg's relaunch self-heals) **while the pad keeps working**.
+
 ### WebSocket protocol (v1.0)
 
 The client/server contract is small and message-typed — keep these shapes stable:
@@ -131,13 +176,23 @@ The client/server contract is small and message-typed — keep these shapes stab
   **immediately release all buttons**. On server restart, recreate the gamepad and restore the
   active profile.
 - **Headless / auto-config**: runs as a `systemd` service (`systemd/iphone-controller.service`,
-  `User=dkim`, `Restart=always`). Startup logs the LAN IP + `<hostname>.local` URLs and prints a
-  scannable QR. Health is exposed at `GET /health`.
+  `User=dkim`, `Restart=always`). Startup logs the LAN IP + `<hostname>.local` + `gamepad.local`
+  URLs (`backend/discovery/network.py`) and prints a scannable QR. Health is exposed at
+  `GET /health`. `gamepad.local` only resolves because `install.sh` installs a second `systemd`
+  unit (`systemd/gamepad-mdns-alias.service`) that runs `avahi-publish -a -R -f gamepad.local
+  <lan-ip>` to advertise that name as an mDNS alias (avahi-daemon already answers
+  `<hostname>.local`). The IP is resolved at unit start (the unit waits for DHCP to assign one),
+  so **reboots self-correct** — only a live IP change without a reboot needs a manual
+  `systemctl restart gamepad-mdns-alias`. The alias step is idempotent like the rest of
+  `install.sh`. Keep the literal `gamepad.local` in `network.py` and `install.sh` in sync.
 - **Resource budget**: < 100 MB RSS, < 5% CPU on a Pi 4.
 
 Config is env-overridable via `backend/config.py` (`RPC_PORT` default 8080, `RPC_PROFILE`,
 `RPC_SESSION_TIMEOUT`, `RPC_FORCE_MOCK`, `RPC_LOG_LEVEL`, `RPC_WRITE_AUTOCONFIG`,
-`RPC_AUTOCONFIG_DIR`, `RPC_ALLOW_REBOOT` default on).
+`RPC_AUTOCONFIG_DIR`, `RPC_ALLOW_REBOOT` default on). Stream-mode video adds `RPC_VIDEO_ENABLED`
+(default **off**), `RPC_VIDEO_CAPTURE` (`kmsgrab`/`fbdev`/`test`), `RPC_VIDEO_FPS` (15),
+`RPC_VIDEO_WIDTH` (480), `RPC_VIDEO_QUALITY` (7), `RPC_VIDEO_DRI_DEVICE` (`/dev/dri/card1`),
+`RPC_VIDEO_FB_DEVICE` (`/dev/fb0`), and `RPC_VIDEO_FFMPEG_CMD` (full ffmpeg-command override).
 
 ## Commands
 

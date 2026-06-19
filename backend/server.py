@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
+from backend.api.video import video_status_endpoint, video_stream_endpoint
 from backend.api.ws import websocket_endpoint
 from backend.config import FRONTEND_DIR, settings
 from backend.discovery.network import controller_urls, qr_ascii
@@ -26,6 +27,7 @@ from backend.input.state import InputStateEngine
 from backend.profiles.autoconfig import write_autoconfig
 from backend.profiles.loader import load_profile
 from backend.sessions.manager import SessionManager
+from backend.video.source import create_source
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +72,23 @@ async def lifespan(app: FastAPI):
     engine = InputStateEngine(profile, driver)
     sessions = SessionManager(engine, timeout_s=settings.session_timeout_s)
 
+    # Optional live video. Decoupled from the input path: if it fails to start it must
+    # not take the controller down, so guard it and leave app.state.video None on error.
+    video = None
+    if settings.video_enabled:
+        try:
+            video = create_source(force_mock=settings.force_mock)
+            await video.start()
+            logger.info("video stream enabled (%s)", video.name)
+        except Exception:
+            logger.exception("failed to start video source; streaming disabled")
+            video = None
+
     app.state.profile = profile
     app.state.driver = driver
     app.state.engine = engine
     app.state.sessions = sessions
+    app.state.video = video
     app.state.started_at = time.time()
 
     reaper = asyncio.create_task(_reaper_loop(app))
@@ -93,6 +108,11 @@ async def lifespan(app: FastAPI):
             await reaper
         except asyncio.CancelledError:
             pass
+        if video is not None:
+            try:
+                await video.stop()
+            except Exception:
+                logger.exception("error stopping video source")
         driver.close()
 
 
@@ -104,6 +124,7 @@ def create_app() -> FastAPI:
         started_at = getattr(app.state, "started_at", None)
         sessions: SessionManager | None = getattr(app.state, "sessions", None)
         driver = getattr(app.state, "driver", None)
+        video = getattr(app.state, "video", None)
         uptime = int(time.time() - started_at) if started_at else 0
         return JSONResponse(
             {
@@ -111,12 +132,15 @@ def create_app() -> FastAPI:
                 "connections": sessions.count if sessions else 0,
                 "uptime": uptime,
                 "driver": driver.name if driver else None,
+                "video": video.name if video else None,
             }
         )
 
-    # Register the WebSocket route BEFORE the catch-all static mount so the mount
-    # at "/" doesn't shadow it (Starlette matches routes in registration order).
+    # Register the WebSocket + video routes BEFORE the catch-all static mount so the
+    # mount at "/" doesn't shadow them (Starlette matches routes in registration order).
     app.add_api_websocket_route("/ws", websocket_endpoint)
+    app.add_api_route("/video/stream.mjpeg", video_stream_endpoint, methods=["GET"])
+    app.add_api_route("/video/status", video_status_endpoint, methods=["GET"])
 
     app.mount("/", _NoCacheStaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
     return app

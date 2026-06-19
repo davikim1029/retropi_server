@@ -153,6 +153,71 @@
     });
   }
 
+  // ---- stream mode (split video + controller) ---------------------------
+  // A second layout: top half live MJPEG video, bottom half the pad. Completely
+  // independent of the WebSocket input path — the <img> just points at
+  // /video/stream.mjpeg, so if video is off or capture fails the controller below is
+  // unaffected (we show a small placeholder and quietly retry).
+  var STREAM_URL = "/video/stream.mjpeg";
+  var STREAM_KEY = "rpc_stream_mode";
+  var STREAM_RETRY_MS = 4000;
+
+  var modeBtn = document.getElementById("mode-btn");
+  var streamPanel = document.getElementById("stream-panel");
+  var streamImg = document.getElementById("stream-img");
+  var streamMsg = document.getElementById("stream-msg");
+  var streamRetryTimer = null;
+  var streamOn = false;
+
+  function startStream() {
+    if (streamMsg) streamMsg.hidden = true;
+    // Cache-bust so a re-enable opens a fresh MJPEG connection rather than a stale one.
+    if (streamImg) streamImg.src = STREAM_URL + "?t=" + Date.now();
+  }
+
+  function stopStream() {
+    if (streamRetryTimer) { clearTimeout(streamRetryTimer); streamRetryTimer = null; }
+    if (streamImg) streamImg.removeAttribute("src"); // closes the MJPEG connection
+  }
+
+  function setStreamMode(on, persist) {
+    streamOn = on;
+    document.body.classList.toggle("mode-stream", on);
+    if (streamPanel) streamPanel.hidden = !on;
+    if (modeBtn) modeBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    if (on) { startStream(); } else { stopStream(); }
+    if (persist !== false) {
+      try { localStorage.setItem(STREAM_KEY, on ? "1" : "0"); } catch (e) {}
+    }
+  }
+
+  if (streamImg) {
+    streamImg.addEventListener("error", function () {
+      if (!streamOn) return;                  // ignore the error fired by clearing src
+      if (streamMsg) streamMsg.hidden = false;
+      // Capture may just be (re)starting on the Pi (ffmpeg backs off + relaunches);
+      // retry so the video self-heals without the user toggling the mode.
+      if (streamRetryTimer) clearTimeout(streamRetryTimer);
+      streamRetryTimer = setTimeout(function () { if (streamOn) startStream(); }, STREAM_RETRY_MS);
+    });
+    streamImg.addEventListener("load", function () {
+      if (streamMsg) streamMsg.hidden = true;
+    });
+  }
+
+  if (modeBtn) {
+    modeBtn.addEventListener("click", function () { setStreamMode(!streamOn); });
+  }
+
+  // Restore the preference on load: ?mode=stream wins, else the last saved choice.
+  (function () {
+    var wantStream = /[?&]mode=stream\b/.test(location.search);
+    if (!wantStream) {
+      try { wantStream = localStorage.getItem(STREAM_KEY) === "1"; } catch (e) {}
+    }
+    if (wantStream) setStreamMode(true, false);
+  })();
+
   // ---- confirm dialogs (EXIT / REBOOT) ----------------------------------
   // Both buttons have no data-button, so the touch/pointer pipeline ignores them
   // (buttonAt returns null) and a click opens a two-tap confirm overlay. Only the

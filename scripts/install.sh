@@ -12,10 +12,15 @@
 #   RPC_PORT=<port>            HTTP/WebSocket port (default: 8080)
 #   RPC_PROFILE=<name>         controller profile (default: gameboy)
 #   RPC_AUTOCONFIG_DIR=<dir>   RetroArch joypad dir (default: RetroPie's)
+#   RPC_VIDEO_ENABLED=1        opt in to live "stream mode": apt-installs ffmpeg, grants
+#                              the kmsgrab capability, wires RPC_VIDEO_* into the unit
+#                              (also honors RPC_VIDEO_CAPTURE/FPS/WIDTH/DRI_DEVICE/FFMPEG_CMD)
 #
 set -euo pipefail
 
 SERVICE_NAME="iphone-controller"
+MDNS_ALIAS_SERVICE="gamepad-mdns-alias"
+MDNS_ALIAS_HOST="gamepad.local"     # keep in sync with backend/discovery/network.py
 DEFAULT_PORT=8080
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,10 +63,17 @@ VENV="$REPO_DIR/.venv"
 PY="$VENV/bin/python"
 UV=""                                    # absolute path to uv, resolved by bootstrap_uv
 
+# Optional live-video "stream mode" is opt-in (off by default): a default install grants
+# no extra privileges. Enable with RPC_VIDEO_ENABLED=1, which apt-installs ffmpeg, grants
+# the kmsgrab capability, and wires RPC_VIDEO_* into the unit.
+case "${RPC_VIDEO_ENABLED:-}" in 1|true|yes|TRUE|YES) VIDEO_ON=1;; *) VIDEO_ON=0;; esac
+VIDEO_ENV_LINES=""
+
 log "Installing for user '$RUN_USER'"
 log "  repo:     $REPO_DIR"
 log "  port:     $PORT"
 log "  profile:  $PROFILE"
+log "  video:    $([ "$VIDEO_ON" = 1 ] && echo "enabled (${RPC_VIDEO_CAPTURE:-kmsgrab})" || echo disabled)"
 
 as_user() { sudo -H -u "$RUN_USER" "$@"; }   # -H sets HOME so uv's cache lands in the user's home
 
@@ -74,8 +86,10 @@ install_packages() {
   # libudev-dev are still required to compile python-uinput. curl fetches the uv installer.
   # joystick (jstest) + evtest are diagnostics for confirming the virtual pad shows up and
   # reports the expected button/hat events (jstest /dev/input/jsX, evtest /dev/input/eventX).
+  # avahi-utils provides avahi-publish, used to advertise the gamepad.local mDNS alias
+  # (avahi-daemon, which answers <hostname>.local, ships preinstalled on Raspberry Pi OS).
   apt-get install -y python3 python3-dev build-essential libudev-dev curl ca-certificates \
-    joystick evtest
+    joystick evtest avahi-utils
 }
 
 # --- 2. uinput kernel module + permissions -----------------------------------
@@ -92,6 +106,50 @@ EOF
   usermod -aG input "$RUN_USER"
   udevadm control --reload-rules
   udevadm trigger || true
+}
+
+# --- 2b. live video / stream mode (opt-in) -----------------------------------
+setup_video() {
+  if [ "$VIDEO_ON" != "1" ]; then
+    log "Live video disabled (set RPC_VIDEO_ENABLED=1 to enable stream mode)."
+    return 0
+  fi
+  log "Enabling live video (stream mode)…"
+  export DEBIAN_FRONTEND=noninteractive
+  # ffmpeg does the capture+MJPEG encode; libcap2-bin provides setcap.
+  apt-get install -y ffmpeg libcap2-bin
+  # The default 'kmsgrab' capture needs CAP_SYS_ADMIN, but the service runs non-root.
+  # Grant the capability on the ffmpeg binary — narrow + opt-in, in the same spirit as
+  # the reboot sudoers rule. (kmsgrab maps the buffer already scanned out to HDMI
+  # read-only, so the TV is unaffected.) Also add the user to video/render so it can
+  # open /dev/dri for the grab. Note: this cap applies to all ffmpeg invocations — fine
+  # for a single-purpose appliance; use RPC_VIDEO_CAPTURE=fbdev to avoid it for testing.
+  local ff
+  ff="$(readlink -f "$(command -v ffmpeg 2>/dev/null)" 2>/dev/null || true)"
+  if [ -n "$ff" ] && command -v setcap >/dev/null 2>&1; then
+    log "  granting cap_sys_admin on $ff (for kmsgrab)…"
+    setcap cap_sys_admin+ep "$ff" || warn "setcap failed; kmsgrab may need RPC_VIDEO_CAPTURE=fbdev."
+  else
+    warn "ffmpeg/setcap missing; cannot grant the kmsgrab capability."
+  fi
+  usermod -aG video,render "$RUN_USER" || warn "could not add $RUN_USER to video/render groups."
+}
+
+# Build the Environment= lines for the unit when video is on. Forwards RPC_VIDEO_* that
+# the operator set at install time so on-Pi tuning (which /dev/dri card, fps, the
+# RPC_VIDEO_FFMPEG_CMD override) sticks without hand-editing the unit.
+build_video_env() {
+  VIDEO_ENV_LINES=""
+  [ "$VIDEO_ON" = "1" ] || return 0
+  VIDEO_ENV_LINES="Environment=RPC_VIDEO_ENABLED=1"
+  local v
+  for v in RPC_VIDEO_CAPTURE RPC_VIDEO_FPS RPC_VIDEO_WIDTH RPC_VIDEO_QUALITY \
+           RPC_VIDEO_DRI_DEVICE RPC_VIDEO_FB_DEVICE RPC_VIDEO_FFMPEG_CMD; do
+    if [ -n "${!v:-}" ]; then
+      # Quote the value so commands with spaces (RPC_VIDEO_FFMPEG_CMD) survive systemd parsing.
+      VIDEO_ENV_LINES+=$'\n'"Environment=\"$v=${!v}\""
+    fi
+  done
 }
 
 # --- 3. uv (Python package/venv manager) -------------------------------------
@@ -133,6 +191,11 @@ setup_env() {
 # --- 4. systemd service ------------------------------------------------------
 install_service() {
   log "Installing + starting systemd service '$SERVICE_NAME'…"
+  build_video_env
+  # Give the service the video/render groups too when streaming is on, so the ffmpeg
+  # child can open /dev/dri for the KMS grab.
+  local supp_groups="input"
+  [ "$VIDEO_ON" = "1" ] && supp_groups="input video render"
   cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=iPhone Virtual Gamepad Controller Service
@@ -142,7 +205,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$RUN_USER
-SupplementaryGroups=input
+SupplementaryGroups=$supp_groups
 WorkingDirectory=$REPO_DIR
 # `uv run --no-sync` runs app.py in the already-built .venv without touching the
 # network or re-resolving at boot (the env was synced at install time).
@@ -150,6 +213,7 @@ ExecStart=$UV run --no-sync app.py
 Environment=RPC_PORT=$PORT
 Environment=RPC_PROFILE=$PROFILE
 Environment=RPC_AUTOCONFIG_DIR=$AUTOCONF_DIR
+${VIDEO_ENV_LINES}
 Restart=always
 RestartSec=3
 
@@ -181,6 +245,58 @@ EOF
     err "sudoers validation failed for $sudoers; removing it (REBOOT button will no-op)."
     rm -f "$sudoers"
   fi
+}
+
+# --- 4c. mDNS alias (gamepad.local) ------------------------------------------
+setup_mdns_alias() {
+  # The Pi already answers to <hostname>.local because avahi-daemon advertises its own
+  # hostname. To ALSO answer to the friendly gamepad.local URL (printed at startup), we
+  # publish an extra mDNS A-record alias with avahi-publish. avahi-publish runs in the
+  # foreground and holds the record live until it exits, so it maps cleanly onto a
+  # Type=simple unit: stopping the unit withdraws the name, restarting re-publishes it.
+  #
+  # The LAN IP is resolved at *start time* from `hostname -I`, so a reboot is self-correcting:
+  # the enabled unit comes back up and re-publishes whatever IP DHCP just handed out. The unit
+  # waits for an IP to exist before publishing, which closes the boot race where it would
+  # otherwise start before the lease arrives. A live IP change *without* a reboot is the only
+  # case needing a manual `sudo systemctl restart ${MDNS_ALIAS_SERVICE}`.
+  #
+  # Idempotent: re-running overwrites the unit, `enable` is a no-op if already enabled, and
+  # `restart` swaps in a fresh publisher (briefly releasing then re-claiming the name, so no
+  # duplicate/`gamepad-2.local` entries pile up).
+  if ! command -v avahi-publish >/dev/null 2>&1; then
+    warn "avahi-publish not found (avahi-utils) — skipping the ${MDNS_ALIAS_HOST} alias."
+    warn "Install it with: sudo apt-get install -y avahi-utils, then re-run this installer."
+    return
+  fi
+  local avahi_publish
+  avahi_publish="$(command -v avahi-publish)"
+  log "Publishing mDNS alias '${MDNS_ALIAS_HOST}' -> this Pi's LAN IP…"
+  # Heredoc is unquoted so ${avahi_publish}/${MDNS_ALIAS_HOST} expand now, but the
+  # \$(hostname …) substitution is escaped so it runs at service start, not install time.
+  cat > "/etc/systemd/system/${MDNS_ALIAS_SERVICE}.service" <<EOF
+[Unit]
+Description=Publish ${MDNS_ALIAS_HOST} as an mDNS alias for the iPhone Virtual Gamepad
+After=network-online.target avahi-daemon.service
+Wants=network-online.target avahi-daemon.service
+
+[Service]
+Type=simple
+# -a publishes an address (A) record; -R skips the reverse (PTR) entry so it can't clash
+# with the host's own reverse record; -f retries instead of failing if avahi-daemon isn't
+# ready yet. The loop blocks until 'hostname -I' yields an IP (handles the post-boot race
+# before DHCP assigns one), then publishes the Pi's first address.
+ExecStart=/bin/sh -c 'ip=""; while [ -z "\$ip" ]; do ip=\$(hostname -I | cut -d" " -f1); [ -z "\$ip" ] && sleep 1; done; exec ${avahi_publish} -a -R -f ${MDNS_ALIAS_HOST} "\$ip"'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable "$MDNS_ALIAS_SERVICE"
+  systemctl restart "$MDNS_ALIAS_SERVICE"
 }
 
 # --- 5. RetroArch autoconfig -------------------------------------------------
@@ -234,15 +350,21 @@ configure_firewall() {
 
 # --- 7. summary --------------------------------------------------------------
 summary() {
-  local ip hostn active
+  local ip hostn active alias_active
   ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   hostn="$(hostname -s 2>/dev/null || hostname)"
   active="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo unknown)"
+  alias_active="$(systemctl is-active "$MDNS_ALIAS_SERVICE" 2>/dev/null || echo unknown)"
 
   echo
   log "Install complete."
   echo "  Service : ${SERVICE_NAME} (${active})"
-  echo "  Connect : http://${ip:-<pi-ip>}:${PORT}    or    http://${hostn}.local:${PORT} or http://gamepad.local:${PORT}"
+  echo "  mDNS    : ${MDNS_ALIAS_SERVICE} (${alias_active}) — advertises ${MDNS_ALIAS_HOST}"
+  echo "  Connect : http://${ip:-<pi-ip>}:${PORT}    or    http://${hostn}.local:${PORT} or http://${MDNS_ALIAS_HOST}:${PORT}"
+  if [ "$VIDEO_ON" = "1" ]; then
+    echo "  Video   : stream mode ON — tap 📺 in the browser, or check ${ip:-<pi-ip>}:${PORT}/video/status"
+    echo "            tune capture on hardware via RPC_VIDEO_FFMPEG_CMD / RPC_VIDEO_DRI_DEVICE (see CLAUDE.md)"
+  fi
   echo "  QR code : sudo journalctl -u ${SERVICE_NAME} -b --no-pager | tail -n 40"
   echo "  Follow  : sudo journalctl -u ${SERVICE_NAME} -f"
   echo
@@ -252,14 +374,20 @@ summary() {
   if [ "$active" != "active" ]; then
     warn "Service is not active. Inspect with: sudo journalctl -u ${SERVICE_NAME} -b --no-pager"
   fi
+  if [ "$alias_active" != "active" ]; then
+    warn "${MDNS_ALIAS_HOST} alias is not active — clients can still use the IP / ${hostn}.local URLs."
+    warn "Inspect with: sudo journalctl -u ${MDNS_ALIAS_SERVICE} -b --no-pager"
+  fi
 }
 
 install_packages
 setup_uinput
+setup_video
 bootstrap_uv
 setup_env
 install_service
 setup_reboot_permission
+setup_mdns_alias
 generate_autoconfig
 generate_es_input
 configure_firewall
