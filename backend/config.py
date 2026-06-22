@@ -68,7 +68,9 @@ class Settings:
     video_width: int = _env_int("RPC_VIDEO_WIDTH", 480)
     # ffmpeg MJPEG quality (-q:v): 2 best … 31 worst.
     video_quality: int = _env_int("RPC_VIDEO_QUALITY", 7)
-    video_dri_device: str = os.environ.get("RPC_VIDEO_DRI_DEVICE", "/dev/dri/card1")
+    # Display DRM node for kmsgrab. card0 is the vc4 display on the Pi (validated on a
+    # Pi 3B: card0 + renderD128, no card1); some multi-GPU setups differ, hence override.
+    video_dri_device: str = os.environ.get("RPC_VIDEO_DRI_DEVICE", "/dev/dri/card0")
     video_fb_device: str = os.environ.get("RPC_VIDEO_FB_DEVICE", "/dev/fb0")
     # Full ffmpeg command override (shlex-split). The escape hatch for tuning the VC4
     # kmsgrab pipeline on hardware without code changes; must end by writing MJPEG to

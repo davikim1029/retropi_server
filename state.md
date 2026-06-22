@@ -5,7 +5,7 @@
 > then continue from **Backlog / next steps** below. The original spec is
 > `iPhone_RetroPie_Controller_Production_Design.md` (the "PEDD").
 
-_Last updated: 2026-06-19._
+_Last updated: 2026-06-21._
 
 ---
 
@@ -214,18 +214,153 @@ pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
 
 ## Backlog / next steps (pick up here)
 
-0. **Validate stream mode on the Pi (NEW 2026-06-19 — code written + mock-verified, NOT yet deployed).**
-   rsync + re-run `install.sh` with `RPC_VIDEO_ENABLED=1`. Then, with a game (or ES) on screen:
-   - From a laptop, `curl http://raspberrypi.local:8080/video/status` (expect `running:true`) and open
-     `/video/stream.mjpeg` in a browser — and confirm the **TV still shows the game** (HDMI unaffected).
-   - On the iPhone, tap 📺 → top-half video + bottom-half working pad.
-   - If kmsgrab yields nothing, iterate the pipeline via `RPC_VIDEO_FFMPEG_CMD` **without redeploying**:
-     check which card is the display (`ls -l /dev/dri`, `cat /sys/class/drm/*/status`) and try
-     `format=nv12`/`bgr0`; `journalctl -u iphone-controller -f` shows ffmpeg's stderr. The controller
-     must keep working throughout (that's the whole point of the module split). `RPC_VIDEO_CAPTURE=test`
-     forces the bundled-frame mock on the Pi to prove transport independent of capture.
-   Probed Pi facts: Pi **3B**, full KMS (`vc4-kms-v3d`), ffmpeg 4.3.9 has kmsgrab, fb is `vc4drmfb`
-   1920×1080 (so `/dev/fb0` likely shows the console, not the game — kmsgrab is the right path).
+0e. **Enhancements (2026-06-21).**
+   - **Services auto-start:** confirmed `iphone-controller`, `mediamtx`, `webplay` all `enabled` (boot-start).
+   - **GBA core → `lr-vba-next`** (lighter than mgba; Pi ~79°C/thermal edge; saves backed up to `~/gba_srm_backup_*`).
+   - **Scanner name cleanup** (strips `0907 - ` catalog prefixes).
+   - **play.html:** view toggle (📺 Video ↔ 🎮 TV-only, hides video + pad fills screen); dpad + A/B nudged
+     up (dpad bottom 26→48px, B 32→52, A 68→88, so Select/Start don't cover Down/B).
+   - **Audio is OPT-IN to protect latency (2026-06-22).** The stream carries Opus audio (AAC→Opus via
+     publish.sh), but the WHEP client requests **video-only by default** — an audio track makes the browser
+     add an A/V-sync/jitter buffer that noticeably raised gameplay latency (user noticed). The 🔇/🔊 button
+     toggles `wantAudio` and **reconnects** the WHEP with/without the audio transceiver (sound on demand,
+     latency only when on). NOTE: publish.sh dying mid-game (broken pipe) drops video until relaunch — only
+     seen under rapid restart/quit/relaunch churn; stable in normal use. Hardening idea: supervise publish.sh
+     in the runner, or have MediaMTX `runOnDemand` pull the FIFO.
+   - **Emulator power + status (#2) DONE — launcher is the power/status hub.** Idle → game grid (tap =
+     power ON); running → an "● EMULATOR ON: <game>" card with **▶ Resume** + **⏻ Power off**. Power-off =
+     `POST /api/quit` → `manager.quit_game()` → RetroArch network **QUIT** (clean exit, flushes SRAM) →
+     runner idle. NOTE: the webplay *service* (systemd) **can't `pkill` the tty1-session RetroArch**
+     (different session — confirmed), so it uses **UDP network commands** (QUIT works; SIGTERM from the
+     service does not). Whole-Pi power-on remains impossible in software (Pi 3B, no soft wake) — this is
+     emulator on/off only, which is what the user wanted.
+   - **SAVE STATES DON'T WORK under our launch → use in-game saves.** RetroArch reports "Core does not
+     support save states" because launching directly (`-L core.so --config`, not via runcommand) doesn't
+     load the **core-info DB** that declares savestate support (`core_info_current_supports_savestate()`
+     returns false; both gambatte AND vba-next; setting `libretro_info_path` did NOT fix it; network
+     cmd interface itself works — GET_STATUS/PAUSE_TOGGLE confirmed). The ★ save/load menu was BUILT then
+     **removed** from both frontends (dead button); the backend plumbing remains dormant
+     (`backend/system/control.py send_retroarch_command`, ws `save_state`/`load_state`; webplay
+     `manager.send_retroarch_command`, `/api/savestate|loadstate`; `network_cmd_enable=true`,
+     `savestate_directory`, `libretro_info_path` set in global retroarch.cfg). **In-game saving works**
+     (SRAM→.srm) and is now robust: set `autosave_interval = "60"` (flushes every 60s, survives a
+     non-clean power-off; previously flush-on-exit-only). To revive save states later: match how
+     runcommand sets up core info, or launch via runcommand.
+
+0w. **WORKING + LOW LATENCY (2026-06-21): video pivoted jsmpeg → WebRTC (MediaMTX).** User verdict:
+   "looks and works amazing." The jsmpeg double-transcode (0a) was laggy *and* fragile, so the video
+   layer was swapped to **WebRTC** — the launcher/runner/control work from 0a all stayed; only video changed.
+   - **Pipeline:** RetroArch records **H.264** (libx264 ultrafast+zerolatency, `webplay/record_h264.cfg`
+     — H.264 has no fps limit, so it encodes the GB's 59.7275fps directly, **no transcode**) → FIFO
+     `/tmp/rpc_h264.ts` → `webplay/publish.sh` ffmpeg **`-c:v copy`** (+ AAC→Opus audio) → RTSP
+     `rtsp://localhost:8554/game` → **MediaMTX** → **WebRTC/WHEP** → native `<video>` in `play.html`.
+   - **MediaMTX**: user-local binary at `webplay/mediamtx/mediamtx` (v1.19.1 arm64, NOT a system install).
+     Ports: RTSP 8554 (ingest), WebRTC 8889 (WHEP) + 8189 (ICE/UDP). Default mediamtx.yml, no auth (LAN).
+   - **play.html** (WebRTC): WHEP client (`http://<host>:8889/game/whep`, video+audio transceivers),
+     **🔇/🔊 mute** (starts muted for iOS autoplay — tap to unmute), **view toggle** (📺 Video ↔ 🎮 TV-only:
+     hides video, pad fills screen, play on the HDMI TV), controls unchanged (`/control` → :8080 gamepad).
+   - **runner.sh** rewritten: **flock singleton** guard, ensures MediaMTX + webplay (:8091), idle-loops
+     on the launch FIFO, per launch starts `publish.sh` + RetroArch H.264→FIFO. `webplay/ctl.sh` start/stop.
+   - **Latency reality:** WebRTC is LAN/Tailscale only (UDP) — use **`http://raspberrypi.local:8091/`** on
+     WiFi for low latency. The **`:8443` funnel can't carry WebRTC media** (HTTPS/TCP only): over the funnel
+     controls work but video won't (remote video = a later problem; Tailscale-app on the phone is the path).
+   - **Also (2026-06-21):** scanner strips ROM catalog prefixes (`0907 - Pokemon…` → `Pokemon - Ruby Version`);
+     **GBA default switched `lr-mgba` → `lr-vba-next`** (lighter; Pi 3B runs ~79°C / thermal-throttle edge under
+     mGBA+encode — no overclock set, undervoltage is hardware/thermal, user improving cooling). GBA saves
+     backed up to `~/gba_srm_backup_*`.
+   - **APPLIANCE (2026-06-21) — stray-instance bug FIXED.** MediaMTX + webplay are now **systemd services**
+     (`webplay/install-services.sh` generates `mediamtx.service` + `webplay.service`, `User=dkim`,
+     `Restart=always`, enabled) alongside the existing `iphone-controller` (:8080). `runner.sh` was
+     simplified to drop the ensure-MediaMTX/ensure-webplay `( cmd & )` subshells (the stray source) — it
+     now only does the flock-singleton tty1 launch loop. **Verified after reboot: runner=1, webplay-py=1,
+     mediamtx=1**, all `active`/`enabled`, video+audio (2 tracks) live. The tty1 hook (runner) stays
+     because RetroArch needs a VT. MediaMTX logs to **journald** now (`journalctl -u mediamtx`), not
+     /tmp/mediamtx.log. Vestigial: webplay `server.py` still has the unused jsmpeg `/ws`+reader_thread
+     (harmless under WebRTC; clean up later). **Still pending (enhancement): remote/off-LAN low-latency
+     play** — WebRTC needs UDP so the HTTPS funnel can't carry it; the path is the Tailscale app on the phone.
+
+0a. **WORKING (2026-06-21): `webplay/` fork — browser launcher + low-latency play, end-to-end.** [VIDEO NOW
+   WEBRTC — see 0w; the jsmpeg/MJPEG transcode path below is superseded but the launcher/runner/control stand.]
+   The whole stack is proven on hardware: from the phone you browse the gbc/gba library, tap a game,
+   it launches on the Pi (RetroArch on tty1, HDMI + recording), and plays on the phone with live
+   video + touch controls — even off-WiFi over a Tailscale funnel. Built as a **separate app** (a
+   fork) on **port 8091 + funnel `https://raspberrypi.tail571bc8.ts.net:8443/`**, leaving the MVP
+   controller (`backend/`, :8080) untouched as the gamepad authority (the fork proxies controls to it).
+   - **Pipeline (proven):** RetroArch records **MJPEG/nut** (mpeg1video can't do the GB's 59.7275fps:
+     "MPEG-1/2 does not support 262144/4389 fps") → `webplay/transcode.sh` ffmpeg → **MPEG-1/TS @ -r 60**
+     → `webplay/server.py` FIFO→WS relay → **jsmpeg** in mobile Safari. Controls: `/control` WS proxy →
+     `:8080` gamepad app → uinput → RetroArch (`Autoconf: iPhone Virtual Gamepad configured in port 1`).
+   - **Launcher:** `webplay/scanner.py` (enumerate `~/RetroPie/roms/{gbc,gba}`, names from gamelist.xml),
+     `webplay/manager.py` (POST launch → writes a request line to the `/tmp/rpc_launch` FIFO; reads
+     `/tmp/rpc_state`), `webplay/server.py` API (`/api/games`, `/api/launch`, `/api/state`). The **tty1
+     runner** `webplay/runner.sh` idle-loops on the launch FIFO (held `exec 3<>` so non-blocking writes
+     find a reader), execs the `emulators.cfg` command, transcodes, writes state; **EXIT (BTN_MODE)**
+     quits RetroArch → runner idle → play.html state-poll redirects to the launcher. 43 tests pass
+     (added `tests/test_webplay_scanner.py`).
+   - **Gotchas baked in (don't relearn):** ffmpeg to a FIFO needs `-y` (else it exits on the overwrite
+     prompt); MPEG-TS relay must **never drop bytes** mid-stream (corrupts → colored garbage), disconnect
+     slow clients instead; never `pkill -f "<name>"` inline over ssh (matches the shell's own argv) — use
+     a **script file** (`webplay/ctl.sh`, `spike/devfeed.sh`, `reload.sh`) or a `[x]` regex; don't
+     `pkill -x uv` (kills the :8080 service's uv too). The undervoltage was self-induced by the retired
+     kmsgrab ffmpeg; with video disabled on :8080 it's fine under load (`0x50000` latched, not current).
+   - **Enable/restore:** `spike/tty1.sh webplay` (point tty1 at the runner) + reboot; `spike/tty1.sh
+     restore` + reboot brings ES back. `webplay/ctl.sh start|stop|restart` manages the app by hand.
+   - **NOT done:** persistence/installer (runner is a manual `~/.bash_profile` swap, not a unit);
+     gba names still show filename prefixes ("0171 - …") — gamelist enrichment didn't match, polish it;
+     NES/SNES; on-device confirmation of EXIT→launcher. The `:8090/:10000` MJPEG spike is now superseded.
+
+0. **PIVOT (2026-06-20): screen-capture is abandoned → browser remote-play box.** The MJPEG
+   screen-capture approach (item 0 history below) is a dead end on this Pi: the VC4 scanout buffer is
+   T-tiled and ffmpeg 4.3 can't de-tile it. The user's clarified goal is bigger anyway — turn the Pi
+   into a **browser-driven remote-play box**: browse/launch gbc+gba games from the phone (bypassing
+   EmulationStation), play with low-latency video on the phone, EXIT returns to *our* web launcher;
+   the game also stays on the TV via HDMI; the existing controller-only view is preserved (reached
+   *through* the launcher, video is an optional 📺 overlay). **Approved plan:**
+   `~/.claude/plans/validated-frolicking-wilkinson.md` (3 pieces: web launcher + tty1 launcher-runner
+   + RetroArch FFmpeg stream → transport → phone). Phased; **Phase 0 spike is a hard gate.**
+   - **Transport decision: jsmpeg over WebSocket (NO extra Pi binary), not MediaMTX/WebRTC.** Reuses
+     ffmpeg (already on Pi) + our FastAPI/WS + a vendored jsmpeg.min.js. MediaMTX/WebRTC (lower latency
+     but needs a binary install the user/classifier deferred) stays the documented upgrade if jsmpeg
+     latency disappoints; HW `h264_v4l2m2m`/`h264_omx` confirmed present for that path.
+   - **De-risked read-only (this session):** RetroArch 1.16 records non-interactively via CLI
+     `-r <FILE> --recordconfig <cfg> --size WxH`; ffmpeg 4.3 has `mpeg1video` (jsmpeg's codec);
+     `video_gpu_record=false` records the core's clean pre-tiling frame (sidesteps tiling entirely).
+   - **Built `spike/` bundle (Mac-validated: bash -n, py_compile, deps resolve):** `record_mpeg1.cfg`
+     (mpeg1video+mp2/mpegts), `spike-runner.sh` (runs on tty1 in place of ES, launches a game with
+     recording → FIFO), `tty1.sh` (reversibly swaps tty1 autologin ES↔runner), `relay.py` (FastAPI WS
+     FIFO→browser, newest-wins), `index.html`+`jsmpeg.min.js` (player), `README.md` (runbook + gate).
+   - **NEXT = hardware run (needs the user):** fix the PSU first (undervoltage), then per
+     `spike/README.md`: `tty1.sh enable <rom> gba` → reboot → `uv run --no-sync spike/relay.py` →
+     open `http://raspberrypi.local:8090/` on the phone; confirm game on HDMI + decoded on phone +
+     acceptable latency + clean EXIT. Gate passes → build Phase 1 (launcher backend). NOTE: Phase 1
+     `scanner.py` (enumerate roms/gbc+gba, names from gamelist.xml) is independent of the spike and
+     Mac-testable — can be built in parallel while the hardware run waits.
+
+   --- history (superseded screen-capture approach) ---
+   **Stream mode: deployed + enabled on the Pi, but the CAPTURE IMAGE is blocked by VC4 tiling
+   (2026-06-19).** All the infrastructure is validated end-to-end on the Pi; only getting a *clean*
+   frame out of the GPU is unsolved. Status:
+   - Deployed (HEAD `9d21727`), `install.sh RPC_VIDEO_ENABLED=1` run. Service active; `/health` →
+     `"video":"ffmpeg"`; `/video/status` → `enabled/running/has_frames:true`; `/video/stream.mjpeg`
+     serves valid multipart MJPEG. Controller unaffected (`driver:uinput`), HDMI unaffected.
+   - **Fixed:** default `RPC_VIDEO_DRI_DEVICE` is now **`/dev/dri/card0`** (this Pi has card0 +
+     renderD128, no card1 — card1 failed with "Failed to open DRM device"). A systemd drop-in on the
+     Pi (`/etc/systemd/system/iphone-controller.service.d/10-video-card.conf`) currently forces card0;
+     once the card0 code default is committed + redeployed, that drop-in is redundant (remove it).
+   - `setcap cap_sys_admin=ep /usr/bin/ffmpeg` is set (kmsgrab needs it; the installer's setcap worked
+     — earlier "no cap" was just `getcap` not on dkim's non-sudo PATH, it lives in /sbin).
+   - **BLOCKER:** kmsgrab on card0 captures the right surface (ES) but the scanout buffer is
+     **T-tiled** (FB reports 1920×1080 32bpp); ffmpeg 4.3's `hwdownload,format=bgr0` can't linearize
+     it → output is horizontally striped/garbled (verified by pulling a frame). `fbdev /dev/fb0` is
+     linear but shows only the **console** (ES draws via KMS/GBM to a separate plane), so it's not a
+     viable source either. Need a de-tiling path — candidates: newer ffmpeg with VC4 DRM-PRIME
+     detiling, RetroArch's built-in recording/stream via the V4L2 H.264 encoder (game-only, not ES,
+     and not MJPEG so needs a player), or switching the Pi off full-KMS (invasive). **Decision pending
+     from the user.**
+   - **Also noticed:** the Pi console is spamming `Undervoltage detected!` — inadequate PSU; advise a
+     proper 5V/2.5A+ supply (causes throttling/instability/SD corruption).
+   Probed Pi facts: Pi **3B**, full KMS (`vc4-kms-v3d`), ffmpeg 4.3.9 (kmsgrab/fbdev/x11grab),
+   display node `/dev/dri/card0`, fb `vc4drmfb` 1920×1080.
 
 1. **Hardware test the new features on the iPhone + TV (DEPLOYED 2026-06-06, code is live on the
    Pi).** The redeploy is done and server-side verified (see Status snapshot); what remains is

@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>RetroPie — Play</title>
+<style>
+  :root { --accent:#5b8cff; }
+  * { box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c0c0f; color: #ddd;
+      font: 13px -apple-system, system-ui, sans-serif; touch-action: none; }
+  body { display: flex; flex-direction: column; }
+
+  #stage { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; background: #000; position: relative; }
+  #screen { width: 100%; height: auto; aspect-ratio: 160 / 144; display: block; image-rendering: auto; background:#000; }
+  #hud { position: absolute; top: 6px; left: 8px; font-size: 11px; color: #7a7; opacity: .8; }
+  #status { position: absolute; top: 6px; right: 8px; font-size: 11px; }
+  .s-ok { color: #6c6; } .s-bad { color: #c66; } .s-wait { color: #cc6; }
+
+  #pad { flex: 1; position: relative; padding: 10px; }
+  .btn { position: absolute; display: flex; align-items: center; justify-content: center;
+      background: #26262e; color: #cfd3e0; border: 1px solid #3a3a46; border-radius: 12px; font-weight: 700; touch-action: none; }
+  .btn.is-pressed { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  .dpad { position: absolute; left: 18px; bottom: 48px; width: 168px; height: 168px; }
+  .dpad .btn { width: 56px; height: 56px; font-size: 20px; }
+  .btn--up { left: 56px; top: 0; } .btn--left { left: 0; top: 56px; }
+  .btn--right { left: 112px; top: 56px; } .btn--down { left: 56px; top: 112px; }
+
+  .btn--b { right: 92px; bottom: 52px; width: 64px; height: 64px; border-radius: 50%; font-size: 20px; }
+  .btn--a { right: 20px; bottom: 88px; width: 64px; height: 64px; border-radius: 50%; font-size: 20px; }
+
+  .btn--l { left: 14px; top: 8px; width: 96px; height: 40px; }
+  .btn--r { right: 14px; top: 8px; width: 96px; height: 40px; }
+
+  .btn--sys { bottom: 8px; width: 86px; height: 34px; font-size: 12px; border-radius: 16px; }
+  .btn--select { left: 50%; margin-left: -96px; } .btn--start { left: 50%; margin-left: 10px; }
+
+  .btn--exit { left: 50%; margin-left: -42px; top: 10px; width: 84px; height: 34px; font-size: 12px;
+      background: #3a2330; border-color: #5a2a3a; color: #e2b8c6; }
+
+  /* top-left chrome: view toggle (browser video <-> controller-only) + mute */
+  #chrome { position: fixed; top: 6px; left: 8px; z-index: 20; display: flex; gap: 6px; }
+  #chrome button { background: rgba(38,38,46,.85); border: 1px solid #3a3a46; border-radius: 8px;
+      color: #cfd3e0; min-width: 40px; height: 30px; font-size: 13px; padding: 0 8px; font-weight: 600; }
+  /* controller-only ("TV") mode: hide the video, let the pad fill the screen */
+  body.mode-tv #stage { display: none; }
+  body.mode-tv #mute-btn { display: none; }
+  body.mode-tv #pad { padding-top: 44px; }
+</style>
+</head>
+<body>
+  <div id="chrome">
+    <button id="mode-btn" aria-label="Toggle view">🎮 TV-only</button>
+    <button id="mute-btn" aria-label="Toggle sound">🔇</button>
+  </div>
+  <div id="stage">
+    <video id="screen" autoplay playsinline muted></video>
+    <div id="hud">…</div>
+    <div id="status" class="s-wait">connecting</div>
+  </div>
+  <div id="pad">
+    <button class="btn btn--l" data-button="L">L</button>
+    <button class="btn btn--r" data-button="R">R</button>
+    <button class="btn btn--exit" id="exit-btn">EXIT</button>
+    <div class="dpad">
+      <button class="btn btn--up" data-button="UP">▲</button>
+      <button class="btn btn--left" data-button="LEFT">◀</button>
+      <button class="btn btn--right" data-button="RIGHT">▶</button>
+      <button class="btn btn--down" data-button="DOWN">▼</button>
+    </div>
+    <button class="btn btn--b" data-button="B">B</button>
+    <button class="btn btn--a" data-button="A">A</button>
+    <button class="btn btn--sys btn--select" data-button="SELECT">SELECT</button>
+    <button class="btn btn--sys btn--start" data-button="START">START</button>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // ---- WebRTC video via WHEP (MediaMTX on :8889, same host as this page) ----
+    // Low-latency path; works on the LAN / Tailscale (HTTP). Over the HTTPS funnel
+    // it won't (mixed content + WebRTC UDP) — that's the documented remote caveat.
+    var video = document.getElementById("screen");
+    var hud = document.getElementById("hud");
+    var WHEP = location.protocol + "//" + location.hostname + ":8889/game/whep";
+    var pc = null, retry = null;
+    var wantAudio = false;  // video-only by default = lowest latency (audio adds A/V-sync delay)
+
+    function iceDone(pc) {
+      return new Promise(function (resolve) {
+        if (pc.iceGatheringState === "complete") return resolve();
+        function chk() { if (pc.iceGatheringState === "complete") { pc.removeEventListener("icegatheringstatechange", chk); resolve(); } }
+        pc.addEventListener("icegatheringstatechange", chk);
+        setTimeout(resolve, 1500);
+      });
+    }
+
+    async function startVideo() {
+      stopVideo();
+      hud.textContent = "video…";
+      pc = new RTCPeerConnection();
+      pc.addTransceiver("video", { direction: "recvonly" });
+      if (wantAudio) pc.addTransceiver("audio", { direction: "recvonly" });  // only when sound is on
+      pc.ontrack = function (e) { video.srcObject = e.streams[0]; };
+      pc.oniceconnectionstatechange = function () {
+        var s = pc.iceConnectionState;
+        if (s === "connected" || s === "completed") hud.textContent = "live";
+        else if (s === "failed" || s === "disconnected") scheduleRetry();
+      };
+      try {
+        var offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await iceDone(pc);
+        var res = await fetch(WHEP, { method: "POST", headers: { "Content-Type": "application/sdp" }, body: pc.localDescription.sdp });
+        if (!res.ok) throw new Error("whep " + res.status);    // no stream yet (game starting) -> retry
+        var answer = await res.text();
+        await pc.setRemoteDescription({ type: "answer", sdp: answer });
+      } catch (err) {
+        hud.textContent = "waiting…";
+        scheduleRetry();
+      }
+    }
+    function stopVideo() { if (pc) { try { pc.close(); } catch (e) {} pc = null; } }
+    function scheduleRetry() {
+      if (retry || document.body.classList.contains("mode-tv")) return;
+      retry = setTimeout(function () { retry = null; startVideo(); }, 1500);
+    }
+
+    // ---- view mode (browser video <-> controller-only "TV") + mute ----
+    var MODE_KEY = "webplay_mode";
+    var modeBtn = document.getElementById("mode-btn");
+    var muteBtn = document.getElementById("mute-btn");
+    function applyMode(m) {
+      var tv = m === "tv";
+      document.body.classList.toggle("mode-tv", tv);
+      modeBtn.textContent = tv ? "📺 Video" : "🎮 TV-only";   // label = what tapping does
+      try { localStorage.setItem(MODE_KEY, m); } catch (e) {}
+      if (tv) { stopVideo(); hud.textContent = "on TV"; } else { startVideo(); }
+    }
+    modeBtn.addEventListener("click", function () {
+      applyMode(document.body.classList.contains("mode-tv") ? "video" : "tv");
+    });
+    // Sound is OFF by default (video-only WebRTC = lowest latency). Turning it on
+    // renegotiates with an audio track, which adds a little A/V-sync latency.
+    muteBtn.addEventListener("click", function () {
+      wantAudio = !wantAudio;
+      muteBtn.textContent = wantAudio ? "🔊" : "🔇";
+      video.muted = !wantAudio;
+      startVideo();  // reconnect with/without the audio track
+    });
+    var savedMode = "video";
+    try { savedMode = localStorage.getItem(MODE_KEY) || "video"; } catch (e) {}
+    applyMode(savedMode);
+
+    // ---- controls (v1.0 protocol over /control -> :8080 gamepad) ----
+    var statusEl = document.getElementById("status");
+    function setStatus(c, t) { statusEl.className = c; statusEl.textContent = t; }
+    var wsProto = location.protocol === "https:" ? "wss://" : "ws://";
+    var socket = null, hb = null, reconnect = 500;
+    function send(o) { if (socket && socket.readyState === 1) socket.send(JSON.stringify(o)); }
+
+    var pressed = new Set(), pointers = new Map();
+    function buttonAt(x, y) { var el = document.elementFromPoint(x, y); var b = el && el.closest("[data-button]"); return b ? b.dataset.button : null; }
+    function setVisual(b, on) { var el = document.querySelector('[data-button="' + b + '"]'); if (el) el.classList.toggle("is-pressed", on); }
+    function recompute() {
+      var next = new Set(); pointers.forEach(function (b) { if (b) next.add(b); });
+      pressed.forEach(function (b) { if (!next.has(b)) { pressed.delete(b); setVisual(b, false); send({ type: "button_up", button: b, timestamp: Date.now() }); } });
+      next.forEach(function (b) { if (!pressed.has(b)) { pressed.add(b); setVisual(b, true); send({ type: "button_down", button: b, timestamp: Date.now() }); } });
+    }
+    function down(e) { var b = buttonAt(e.clientX, e.clientY); if (b === null) return; e.preventDefault(); pointers.set(e.pointerId, b); recompute(); }
+    function move(e) { if (!pointers.has(e.pointerId)) return; e.preventDefault(); pointers.set(e.pointerId, buttonAt(e.clientX, e.clientY)); recompute(); }
+    function up(e) { if (!pointers.has(e.pointerId)) return; e.preventDefault(); pointers.delete(e.pointerId); recompute(); }
+    function clearAll() { pointers.clear(); pressed.forEach(function (b) { setVisual(b, false); }); pressed.clear(); }
+    document.addEventListener("pointerdown", down, { passive: false });
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up, { passive: false });
+    window.addEventListener("pointercancel", up, { passive: false });
+    window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+    document.getElementById("exit-btn").addEventListener("click", function () {
+      send({ type: "button_down", button: "EXIT", timestamp: Date.now() });
+      setTimeout(function () { send({ type: "button_up", button: "EXIT", timestamp: Date.now() }); }, 250);
+      setStatus("s-wait", "exiting");
+    });
+
+    function connect() {
+      setStatus("s-wait", "connecting");
+      socket = new WebSocket(wsProto + location.host + "/control");
+      socket.onopen = function () { reconnect = 500; send({ type: "hello", protocol: "1.0", controller: "gameboy" }); };
+      socket.onmessage = function (ev) { var m; try { m = JSON.parse(ev.data); } catch (e) { return; } if (m.type === "accepted") { setStatus("s-ok", "connected"); if (!hb) hb = setInterval(function () { send({ type: "heartbeat" }); }, 2000); } };
+      socket.onclose = function () { setStatus("s-bad", "reconnecting"); if (hb) { clearInterval(hb); hb = null; } clearAll(); setTimeout(connect, reconnect); reconnect = Math.min(reconnect * 2, 5000); };
+      socket.onerror = function () { socket.close(); };
+    }
+    connect();
+
+    // Return to the launcher when the game ends.
+    setInterval(function () {
+      fetch("/api/state").then(function (r) { return r.json(); }).then(function (s) {
+        if (s && s.status === "idle") { stopVideo(); location.replace("/"); }
+      }).catch(function () {});
+    }, 2500);
+  })();
+  </script>
+</body>
+</html>

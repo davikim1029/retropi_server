@@ -157,6 +157,14 @@ html, body {
 }
 .btn--mode[aria-pressed="true"] { background: #1f5d2b; }
 
+/* Save/Load-state button (★), in the left chrome cluster. */
+.btn--state {
+  width: 38px;
+  padding: 0;
+  font-size: 17px;
+  background: #2f3a4a;
+}
+
 /* --- Split "stream mode": live game video up top, controller below. All scoped to
        body.mode-stream so the default full-screen pad layout is byte-for-byte unchanged
        when the mode is off. --- */

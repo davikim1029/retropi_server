@@ -22,7 +22,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from backend.input.state import InputStateEngine
 from backend.profiles.loader import Profile
 from backend.sessions.manager import SessionManager
-from backend.system.control import request_reboot
+from backend.system.control import request_reboot, send_retroarch_command
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +87,13 @@ def _handle_button(engine: InputStateEngine, message: dict, pressed: bool) -> No
 
 
 def _handle_system(message: dict) -> None:
-    """Host-level actions (not gamepad input). Currently only 'reboot'."""
+    """Host-level actions (not gamepad input): reboot + RetroArch save/load state."""
     action = message.get("action")
     if action == "reboot":
         request_reboot()  # guarded: no-ops off a real Pi (see system/control.py)
+    elif action == "save_state":
+        send_retroarch_command("SAVE_STATE")
+    elif action == "load_state":
+        send_retroarch_command("LOAD_STATE")
     else:
         logger.debug("ignoring system message with unknown action %r", action)

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>RetroPie — Library</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; background: #0c0c0f; color: #e6e6ee;
+      font: 15px -apple-system, system-ui, sans-serif; }
+  header { padding: 18px 16px 6px; }
+  h1 { margin: 0; font-size: 18px; } .sub { color: #888; font-size: 12px; margin-top: 2px; }
+  .sys { margin: 18px 16px 4px; color: #8aa0ff; font-size: 12px; text-transform: uppercase;
+      letter-spacing: .06em; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 6px 16px; }
+  .card { background: #1c1c24; border: 1px solid #2c2c38; border-radius: 12px; padding: 14px 12px;
+      min-height: 64px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+  .card:active { background: #2a2a5a; border-color: #5b8cff; }
+  #msg { padding: 24px 16px; color: #999; }
+  #overlay { position: fixed; inset: 0; background: rgba(8,8,12,.92); display: none;
+      align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
+  #overlay.on { display: flex; }
+  .spin { width: 34px; height: 34px; border: 3px solid #333; border-top-color: #5b8cff;
+      border-radius: 50%; animation: r 1s linear infinite; } @keyframes r { to { transform: rotate(360deg); } }
+  /* Emulator power/status: shown when a game is running (idle => the grid below = power on) */
+  #nowplaying { display: none; margin: 16px; padding: 16px; background: #16223a;
+      border: 1px solid #2a3a5a; border-radius: 14px; }
+  #nowplaying .lbl { color: #6ee08a; font-size: 12px; letter-spacing: .06em; }
+  #nowplaying .name { font-size: 18px; font-weight: 700; margin: 4px 0 14px; }
+  #nowplaying .row { display: flex; gap: 10px; }
+  #nowplaying button { flex: 1; height: 48px; border-radius: 10px; border: 1px solid #3a3a46;
+      font-size: 15px; font-weight: 600; color: #e6e6ee; }
+  #np-resume { background: #2a5a2e; }
+  #np-power { background: #5a2a2a; }
+</style>
+</head>
+<body>
+  <header><h1>🎮 RetroPie Library</h1><div class="sub">Tap a game to play it on your phone</div></header>
+  <div id="nowplaying">
+    <div class="lbl">● EMULATOR ON</div>
+    <div class="name" id="np-name"></div>
+    <div class="row">
+      <button id="np-resume">▶ Resume</button>
+      <button id="np-power">⏻ Power off</button>
+    </div>
+  </div>
+  <div id="lib"></div>
+  <div id="msg">Loading library…</div>
+  <div id="overlay"><div class="spin"></div><div id="ov-text">Launching…</div></div>
+
+  <script>
+  (function () {
+    var lib = document.getElementById("lib"), msg = document.getElementById("msg");
+    var overlay = document.getElementById("overlay"), ovText = document.getElementById("ov-text");
+    var LABEL = { gbc: "Game Boy / Color", gba: "Game Boy Advance" };
+
+    // If a game is running, show the power/status card; idle => load the grid (= power on).
+    fetch("/api/state").then(function (r) { return r.json(); }).then(function (s) {
+      if (s && s.status === "running") showNowPlaying(s);
+      else loadGames();
+    }).catch(loadGames);
+
+    function showNowPlaying(s) {
+      var rom = (s.game && s.game.rom) || "";
+      var name = rom.split("/").pop().replace(/\.[^.]+$/, "")
+                    .replace(/^\s*\d{2,4}\s*[-_]+\s*/, "").replace(/_/g, " ");
+      document.getElementById("np-name").textContent = name || "Game";
+      document.getElementById("nowplaying").style.display = "block";
+      msg.style.display = "none";
+    }
+    document.getElementById("np-resume").addEventListener("click", function () { location.href = "/play"; });
+    document.getElementById("np-power").addEventListener("click", function () {
+      this.disabled = true; this.textContent = "Powering off…";
+      fetch("/api/quit", { method: "POST" }).catch(function () {}).finally(function () {
+        setTimeout(function () { location.reload(); }, 2500);  // runner returns to idle -> grid
+      });
+    });
+
+    function loadGames() {
+      fetch("/api/games").then(function (r) { return r.json(); }).then(function (d) {
+        var games = (d && d.games) || [];
+        if (!games.length) { msg.textContent = "No gbc/gba ROMs found."; return; }
+        msg.style.display = "none";
+        var bySys = {};
+        games.forEach(function (g) { (bySys[g.system] = bySys[g.system] || []).push(g); });
+        Object.keys(bySys).forEach(function (sys) {
+          var h = document.createElement("div"); h.className = "sys"; h.textContent = LABEL[sys] || sys;
+          lib.appendChild(h);
+          var grid = document.createElement("div"); grid.className = "grid";
+          bySys[sys].forEach(function (g) {
+            var c = document.createElement("div"); c.className = "card"; c.textContent = g.name;
+            c.addEventListener("click", function () { launch(g); });
+            grid.appendChild(c);
+          });
+          lib.appendChild(grid);
+        });
+      }).catch(function () { msg.textContent = "Could not load library."; });
+    }
+
+    function launch(g) {
+      ovText.textContent = "Launching " + g.name + "…";
+      overlay.classList.add("on");
+      fetch("/api/launch", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ system: g.system, rom: g.rom_path }),
+      }).then(function (r) {
+        if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || "launch failed"); });
+        setTimeout(function () { location.href = "/play"; }, 1500);  // give the game a moment to come up
+      }).catch(function (err) {
+        overlay.classList.remove("on");
+        alert("Launch failed: " + err.message);
+      });
+    }
+  })();
+  </script>
+</body>
+</html>

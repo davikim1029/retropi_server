@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>RetroPie Play (spike)</title>
+<style>
+  :root { --accent:#5b8cff; }
+  * { box-sizing: border-box; -webkit-user-select: none; user-select: none;
+      -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0c0c0f;
+      color: #ddd; font: 13px -apple-system, system-ui, sans-serif; touch-action: none; }
+  body { display: flex; flex-direction: column; }
+
+  /* video — scale the 160x144 canvas to full width, keeping the GB aspect ratio.
+     (Only capping max-size left it at its tiny 160x144 native pixels.) The stage
+     height follows the video, so the pad gets all the remaining space. */
+  #stage { flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+      background: #000; position: relative; }
+  #screen { width: 100%; height: auto; aspect-ratio: 160 / 144; display: block;
+      image-rendering: pixelated; }
+  #hud { position: absolute; top: 6px; left: 8px; font-size: 11px; color: #7a7; opacity: .8; }
+  #status { position: absolute; top: 6px; right: 8px; font-size: 11px; }
+  .s-ok { color: #6c6; } .s-bad { color: #c66; } .s-wait { color: #cc6; }
+
+  /* pad */
+  #pad { flex: 1; position: relative; padding: 10px; }
+  .btn { position: absolute; display: flex; align-items: center; justify-content: center;
+      background: #26262e; color: #cfd3e0; border: 1px solid #3a3a46; border-radius: 12px;
+      font-weight: 700; touch-action: none; }
+  .btn.is-pressed { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* d-pad (bottom-left cross) */
+  .dpad { position: absolute; left: 18px; bottom: 26px; width: 168px; height: 168px; }
+  .dpad .btn { width: 56px; height: 56px; font-size: 20px; }
+  .btn--up    { left: 56px; top: 0; }
+  .btn--left  { left: 0; top: 56px; }
+  .btn--right { left: 112px; top: 56px; }
+  .btn--down  { left: 56px; top: 112px; }
+
+  /* face buttons (bottom-right) */
+  .btn--b { right: 92px; bottom: 32px; width: 64px; height: 64px; border-radius: 50%; font-size: 20px; }
+  .btn--a { right: 20px; bottom: 68px; width: 64px; height: 64px; border-radius: 50%; font-size: 20px; }
+
+  /* shoulders (top corners of the pad) */
+  .btn--l { left: 14px; top: 8px; width: 96px; height: 40px; }
+  .btn--r { right: 14px; top: 8px; width: 96px; height: 40px; }
+
+  /* system (center bottom) */
+  .btn--sys { bottom: 8px; width: 86px; height: 34px; font-size: 12px; border-radius: 16px; }
+  .btn--select { left: 50%; margin-left: -96px; }
+  .btn--start  { left: 50%; margin-left: 10px; }
+
+  /* exit (center top) */
+  .btn--exit { left: 50%; margin-left: -42px; top: 10px; width: 84px; height: 34px;
+      font-size: 12px; background: #3a2330; border-color: #5a2a3a; color: #e2b8c6; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="screen"></canvas>
+    <div id="hud">…</div>
+    <div id="status" class="s-wait">connecting</div>
+  </div>
+
+  <div id="pad">
+    <button class="btn btn--l" data-button="L">L</button>
+    <button class="btn btn--r" data-button="R">R</button>
+    <button class="btn btn--exit" id="exit-btn">EXIT</button>
+
+    <div class="dpad">
+      <button class="btn btn--up"    data-button="UP">▲</button>
+      <button class="btn btn--left"  data-button="LEFT">◀</button>
+      <button class="btn btn--right" data-button="RIGHT">▶</button>
+      <button class="btn btn--down"  data-button="DOWN">▼</button>
+    </div>
+
+    <button class="btn btn--b" data-button="B">B</button>
+    <button class="btn btn--a" data-button="A">A</button>
+
+    <button class="btn btn--sys btn--select" data-button="SELECT">SELECT</button>
+    <button class="btn btn--sys btn--start"  data-button="START">START</button>
+  </div>
+
+  <script src="jsmpeg.min.js"></script>
+  <script>
+  (function () {
+    "use strict";
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+
+    // ---- video (jsmpeg over /ws) ----
+    var hud = document.getElementById("hud");
+    var frames = 0, last = performance.now();
+    new JSMpeg.Player(proto + location.host + "/ws", {
+      canvas: document.getElementById("screen"), audio: false, videoBufferSize: 256 * 1024,
+      onVideoDecode: function () {
+        frames++; var now = performance.now();
+        if (now - last >= 1000) { hud.textContent = Math.round(frames * 1000 / (now - last)) + " fps"; frames = 0; last = now; }
+      },
+    });
+
+    // ---- controls (v1.0 protocol over /control -> gamepad :8080) ----
+    var statusEl = document.getElementById("status");
+    function setStatus(cls, txt) { statusEl.className = cls; statusEl.textContent = txt; }
+
+    var socket = null, hb = null, reconnect = 500;
+    function send(o) { if (socket && socket.readyState === 1) socket.send(JSON.stringify(o)); }
+
+    var pressed = new Set(), pointers = new Map();
+    function buttonAt(x, y) {
+      var el = document.elementFromPoint(x, y); var b = el && el.closest("[data-button]");
+      return b ? b.dataset.button : null;
+    }
+    function setVisual(b, on) { var el = document.querySelector('[data-button="' + b + '"]'); if (el) el.classList.toggle("is-pressed", on); }
+    function recompute() {
+      var next = new Set(); pointers.forEach(function (b) { if (b) next.add(b); });
+      pressed.forEach(function (b) { if (!next.has(b)) { pressed.delete(b); setVisual(b, false); send({ type: "button_up", button: b, timestamp: Date.now() }); } });
+      next.forEach(function (b) { if (!pressed.has(b)) { pressed.add(b); setVisual(b, true); send({ type: "button_down", button: b, timestamp: Date.now() }); } });
+    }
+    function down(e) { var b = buttonAt(e.clientX, e.clientY); if (b === null) return; e.preventDefault(); pointers.set(e.pointerId, b); recompute(); }
+    function move(e) { if (!pointers.has(e.pointerId)) return; e.preventDefault(); pointers.set(e.pointerId, buttonAt(e.clientX, e.clientY)); recompute(); }
+    function up(e) { if (!pointers.has(e.pointerId)) return; e.preventDefault(); pointers.delete(e.pointerId); recompute(); }
+    function clearAll() { pointers.clear(); pressed.forEach(function (b) { setVisual(b, false); }); pressed.clear(); }
+
+    document.addEventListener("pointerdown", down, { passive: false });
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up, { passive: false });
+    window.addEventListener("pointercancel", up, { passive: false });
+    window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+    // EXIT: momentary press (down, then up after a hold) so the RetroArch hotkey registers.
+    document.getElementById("exit-btn").addEventListener("click", function () {
+      send({ type: "button_down", button: "EXIT", timestamp: Date.now() });
+      setTimeout(function () { send({ type: "button_up", button: "EXIT", timestamp: Date.now() }); }, 250);
+    });
+
+    function connect() {
+      setStatus("s-wait", "connecting");
+      socket = new WebSocket(proto + location.host + "/control");
+      socket.onopen = function () { reconnect = 500; send({ type: "hello", protocol: "1.0", controller: "gameboy" }); };
+      socket.onmessage = function (ev) {
+        var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === "accepted") { setStatus("s-ok", "connected"); hb = setInterval(function () { send({ type: "heartbeat" }); }, 2000); }
+      };
+      socket.onclose = function () { setStatus("s-bad", "reconnecting"); if (hb) { clearInterval(hb); hb = null; } clearAll(); setTimeout(connect, reconnect); reconnect = Math.min(reconnect * 2, 5000); };
+      socket.onerror = function () { socket.close(); };
+    }
+    connect();
+  })();
+  </script>
+</body>
+</html>

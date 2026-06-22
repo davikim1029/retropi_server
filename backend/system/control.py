@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import platform
+import socket
 import subprocess
 
 from backend.config import settings
@@ -31,6 +32,24 @@ logger = logging.getLogger(__name__)
 
 # Resolved by sudo via secure_path; install.sh authorizes this exact command.
 REBOOT_COMMAND = ["sudo", "-n", "systemctl", "reboot"]
+
+# RetroArch's UDP network-command interface (network_cmd_enable + network_cmd_port
+# in retroarch.cfg). Used for the ★ Save/Load-state menu.
+RA_CMD_ADDR = ("127.0.0.1", 55355)
+
+
+def send_retroarch_command(command: str) -> bool:
+    """Send a RetroArch network command (e.g. "SAVE_STATE", "LOAD_STATE") over UDP.
+
+    Fire-and-forget: harmless if no game is running / nothing is listening (e.g. on
+    the Mac), so no Pi guard is needed — it's not a privileged action."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.sendto((command + "\n").encode(), RA_CMD_ADDR)  # RetroArch needs newline-terminated
+        return True
+    except Exception:  # pragma: no cover - defensive
+        logger.exception("failed to send RetroArch command %r", command)
+        return False
 
 
 def request_reboot() -> bool:

@@ -191,7 +191,7 @@ Config is env-overridable via `backend/config.py` (`RPC_PORT` default 8080, `RPC
 `RPC_SESSION_TIMEOUT`, `RPC_FORCE_MOCK`, `RPC_LOG_LEVEL`, `RPC_WRITE_AUTOCONFIG`,
 `RPC_AUTOCONFIG_DIR`, `RPC_ALLOW_REBOOT` default on). Stream-mode video adds `RPC_VIDEO_ENABLED`
 (default **off**), `RPC_VIDEO_CAPTURE` (`kmsgrab`/`fbdev`/`test`), `RPC_VIDEO_FPS` (15),
-`RPC_VIDEO_WIDTH` (480), `RPC_VIDEO_QUALITY` (7), `RPC_VIDEO_DRI_DEVICE` (`/dev/dri/card1`),
+`RPC_VIDEO_WIDTH` (480), `RPC_VIDEO_QUALITY` (7), `RPC_VIDEO_DRI_DEVICE` (`/dev/dri/card0`),
 `RPC_VIDEO_FB_DEVICE` (`/dev/fb0`), and `RPC_VIDEO_FFMPEG_CMD` (full ffmpeg-command override).
 
 ## Commands

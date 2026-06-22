@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>jsmpeg spike</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #ccc;
+               font: 14px -apple-system, system-ui, sans-serif; }
+  #wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px; }
+  canvas { width: 100%; max-width: 720px; image-rendering: pixelated; background: #111;
+           border-radius: 6px; }
+  #hud { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="screen"></canvas>
+  <div id="hud">connecting…</div>
+</div>
+<script src="jsmpeg.min.js"></script>
+<script>
+  // Phase 0 spike: decode the MPEG1/TS the relay forwards over WebSocket.
+  // audio:false keeps latency tight for the spike; videoBufferSize small so the
+  // decoder doesn't accumulate a backlog (we want live, not smooth-buffered).
+  var url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+  var hud = document.getElementById("hud");
+  var frames = 0, last = performance.now();
+  var player = new JSMpeg.Player(url, {
+    canvas: document.getElementById("screen"),
+    audio: false,
+    videoBufferSize: 256 * 1024,
+    onSourceEstablished: function () { hud.textContent = "stream connected"; },
+    onVideoDecode: function () {
+      frames++;
+      var now = performance.now();
+      if (now - last >= 1000) {
+        hud.textContent = "~" + Math.round((frames * 1000) / (now - last)) + " fps decoded";
+        frames = 0; last = now;
+      }
+    },
+  });
+  window.addEventListener("error", function (e) { hud.textContent = "error: " + e.message; });
+</script>
+</body>
+</html>
