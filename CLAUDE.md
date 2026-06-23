@@ -9,23 +9,31 @@ auto-reconnect, QR discovery, and `/health`. The design spec
 (`iPhone_RetroPie_Controller_Production_Design.md`, the "PEDD") remains the source of truth for
 the broader vision; keep it in sync when design decisions change.
 
-Also implemented: an optional **"stream mode"** (live game video next to the controls in the
-browser) — see *Live video / stream mode* below. It is **off by default**, decoupled from the
-input path, and **mock-verified on the Mac**; the real on-Pi capture pipeline is **pending
-hardware validation**.
+Also built (and **working on hardware**): the **`webplay/` fork** — a browser game console that
+**supersedes** the old MJPEG "stream mode". From a phone you browse the gbc/gba ROM library, launch a
+game (EmulationStation bypassed), and play it with **low-latency WebRTC video + touch controls**, or
+just use the pad and watch the HDMI TV. It runs as its own app on **`:8091`** (+ a Tailscale funnel)
+and **reuses this MVP controller (`:8080`) as the gamepad** via a `/control` proxy. **`state.md` is
+the living source of truth for the webplay system** — architecture, the WebRTC pipeline, the tty1
+runner, MediaMTX, the appliance services, and the hard-won gotchas. **Read `state.md` first** when
+touching webplay; CLAUDE.md only points the way.
 
 **Deferred (not yet built):** the security model (pairing token, origin validation, rate
-limiting — PEDD §10) — note this also leaves the video stream open to any LAN device; NES/SNES
-profiles; load tests; and a WebRTC/H.264 low-latency video path. The code is structured so these
-layer on without rework.
+limiting — PEDD §10) — note this also leaves the gamepad + webplay open to any LAN device; NES/SNES
+profiles; load tests; and **off-LAN low-latency play** (WebRTC needs UDP, so the HTTPS funnel can't
+carry the media — the path is the Tailscale app on the phone).
 
 Layout (`backend/` mirrors PEDD §21):
 
 ```
-app.py                      # entrypoint (python3 app.py / systemd)
+app.py                      # entrypoint for the MVP :8080 controller (systemd: iphone-controller)
 backend/ api/ sessions/ input/ profiles/ discovery/ system/ video/  config.py  server.py
-frontend/ index.html controller.css controller.js
-tests/  systemd/
+frontend/ index.html controller.css controller.js     # the :8080 controller UI
+webplay/                    # the launcher + WebRTC play fork (:8091): scanner, manager, server,
+                            #   runner.sh (tty1), publish.sh, record_h264.cfg, mediamtx/, install-services.sh,
+                            #   frontend/ (launcher.html + play.html)
+webplay_app.py              # webplay entrypoint (uv run webplay_app.py)
+spike/  tests/  systemd/
 pyproject.toml  uv.lock
 ```
 
@@ -119,44 +127,26 @@ from the Pi; override with `--guid`). Unlike autoconfig, this is **not** written
 (ES owns the file and only reads it at launch) — `scripts/generate_es_input.py` does it, run by
 `install.sh` against the standard ES config paths.
 
-### Live video / stream mode (optional, off by default)
+### Live video / play — WebRTC via the `webplay/` fork (MJPEG capture retired)
 
-A **second browser layout** ("stream mode") shows the game on the phone: top half live video, bottom
-half the existing pad. It is opt-in (`RPC_VIDEO_ENABLED`, default off) and **deliberately decoupled
-from the controller** — separate package (`backend/video/`), separate HTTP routes
-(`backend/api/video.py`), separate supervised subprocess — so if capture misbehaves the WebSocket
-gamepad is untouched and the two diagnose independently (open `/video/stream.mjpeg` alone). Transport
-is **MJPEG over HTTP** (`multipart/x-mixed-replace`), rendered by a plain `<img>` in mobile Safari —
-no client build step, no JS player.
+The original MJPEG "stream mode" (`backend/video/` + `backend/api/video.py`, the `body.mode-stream`
+`<img>` split, all the `RPC_VIDEO_*` config) **screen-captured the Pi's HDMI output and is a dead end
+on this hardware**: under full KMS the VC4 scanout buffer is **T-tiled** and ffmpeg 4.3 can't de-tile
+it (kmsgrab → striped garbage; `/dev/fb0` shows only the console). That code is **kept inert** (off by
+`RPC_VIDEO_ENABLED`, default off) but superseded — don't extend it.
 
-`backend/video/` mirrors the `GamepadDriver` pattern: a `VideoSource` ABC + `create_source()` factory
-(`source.py`) with two backends — `MockVideoSource` (`mock_source.py`, cycles the bundled JPEGs in
-`backend/video/assets/`; used on macOS, in tests, under `RPC_FORCE_MOCK`, or `RPC_VIDEO_CAPTURE=test`)
-and `FfmpegVideoSource` (`ffmpeg_source.py`, the real Pi capture). The shared correctness core is
-`JpegStreamSplitter` (reassembles ffmpeg's MJPEG stdout into whole JPEG frames). Sources hold only the
-**latest** frame + a sequence number, so subscribers are **newest-wins** (a slow phone never
-back-pressures capture, analogous to input's last-write-wins). `server.py`'s lifespan starts/stops the
-source guarded in a try/except (a video failure leaves `app.state.video = None` and never takes the
-controller down); `/health` reports the backend in `"video"`, and `/video/status` gives
-enabled/running/has-frames for diagnosis. Routes are registered **before** the static mount, like
-`/ws` and `/health`.
+Low-latency video now comes from the **`webplay/` fork**: RetroArch records **H.264** of the *rendered*
+game (clean, pre-tiling, no fps limit so it handles the GB's 59.73 fps directly), `webplay/publish.sh`
+remuxes it (`-c copy`, cheap) to **MediaMTX**, which serves **WebRTC (WHEP)** to a native `<video>` in
+mobile Safari — sub-100 ms, no transcode. RetroArch needs a VT, so a **tty1 runner**
+(`webplay/runner.sh`, replacing the ES autostart via `spike/tty1.sh webplay`) launches the chosen game
+on request from the launcher (FIFO IPC). MediaMTX + webplay run as **systemd services**
+(`webplay/install-services.sh`, idempotent — also captures the RetroArch config the features need).
+Audio is opt-in (Opus, off by default to protect latency); power-off uses RetroArch's UDP `QUIT`.
 
-**Capture on the Pi:** default `RPC_VIDEO_CAPTURE=kmsgrab` — correct for the Pi's full-KMS stack
-(`vc4-kms-v3d`). kmsgrab maps the framebuffer **already scanned out to HDMI, read-only**, and never
-becomes DRM master, so **the TV keeps working** whether or not anyone streams (and regardless of plain
-pad vs split view). `FfmpegVideoSource` **supervises** ffmpeg (relaunch with backoff on crash). The
-exact VC4 pipeline (`hwdownload,format=…`, which `/dev/dri/cardN`) may need tuning on hardware, so the
-**whole ffmpeg command is overridable** via `RPC_VIDEO_FFMPEG_CMD` (must end `… -f mjpeg pipe:1`) —
-iterate on the Pi without code changes. `RPC_VIDEO_CAPTURE=fbdev` is a diagnostic fallback (under full
-KMS `/dev/fb0` usually shows the console, not the game). kmsgrab needs `CAP_SYS_ADMIN`; the service is
-non-root, so `install.sh` (only when `RPC_VIDEO_ENABLED=1`) apt-installs ffmpeg, `setcap
-cap_sys_admin+ep`s the ffmpeg binary, adds the user to `video`/`render`, and wires `RPC_VIDEO_*` into
-the unit — all opt-in, like the reboot sudoers rule.
-
-**Frontend:** the split view is additive and scoped to `body.mode-stream` (the default full-screen pad
-is unchanged). A 📺 toggle in the top-left chrome flips it; the choice persists in `localStorage` and
-honors `?mode=stream`. The `<img>` points at `/video/stream.mjpeg`; on error it shows a small "Video
-unavailable" placeholder and retries (so ffmpeg's relaunch self-heals) **while the pad keeps working**.
+**The full webplay design — launcher API, the FIFO/runner IPC, the WebRTC pipeline, the appliance
+services, in-game-save handling, and the gotchas — lives in `state.md`, kept current. Read it before
+changing webplay.** This section is only the orientation.
 
 ### WebSocket protocol (v1.0)
 
@@ -187,12 +177,12 @@ The client/server contract is small and message-typed — keep these shapes stab
   `install.sh`. Keep the literal `gamepad.local` in `network.py` and `install.sh` in sync.
 - **Resource budget**: < 100 MB RSS, < 5% CPU on a Pi 4.
 
-Config is env-overridable via `backend/config.py` (`RPC_PORT` default 8080, `RPC_PROFILE`,
-`RPC_SESSION_TIMEOUT`, `RPC_FORCE_MOCK`, `RPC_LOG_LEVEL`, `RPC_WRITE_AUTOCONFIG`,
-`RPC_AUTOCONFIG_DIR`, `RPC_ALLOW_REBOOT` default on). Stream-mode video adds `RPC_VIDEO_ENABLED`
-(default **off**), `RPC_VIDEO_CAPTURE` (`kmsgrab`/`fbdev`/`test`), `RPC_VIDEO_FPS` (15),
-`RPC_VIDEO_WIDTH` (480), `RPC_VIDEO_QUALITY` (7), `RPC_VIDEO_DRI_DEVICE` (`/dev/dri/card0`),
-`RPC_VIDEO_FB_DEVICE` (`/dev/fb0`), and `RPC_VIDEO_FFMPEG_CMD` (full ffmpeg-command override).
+Config for the **:8080 controller** is env-overridable via `backend/config.py` (`RPC_PORT` default
+8080, `RPC_PROFILE`, `RPC_SESSION_TIMEOUT`, `RPC_FORCE_MOCK`, `RPC_LOG_LEVEL`, `RPC_WRITE_AUTOCONFIG`,
+`RPC_AUTOCONFIG_DIR`, `RPC_ALLOW_REBOOT` default on). The `RPC_VIDEO_*` vars belong to the **retired
+MJPEG capture** (`backend/video/`, default off — see *Live video* above), **not** the live video path.
+The live video/play system is the **`webplay/` fork** (WebRTC), configured in `webplay/` + documented
+in `state.md`, not via `backend/config.py`.
 
 ## Commands
 
@@ -204,18 +194,25 @@ uv run pytest -q                   # full suite (forces mock via tests/conftest.
 uv run pytest tests/test_input_state.py::test_last_write_wins_per_button  # single test
 ```
 
-**Deploy/install on the Pi** (`ssh dkim@raspberrypi`, real uinput):
+**Deploy/install on the Pi.** Real path is **`~/GitHub/retropi_server`**; use **`raspberrypi.local`**
+(LAN) — the bare `raspberrypi` hostname resolves to a flaky Tailscale IP. Frontend files are served
+no-cache, so an rsync alone is picked up on reload (no restart needed for frontend tweaks).
 ```bash
-rsync -av --exclude .venv --exclude __pycache__ ./ dkim@raspberrypi:~/retropi_server/
-# then on the Pi — one command does everything (apt deps, uinput module+perms, uv +
-# venv via `uv sync`, systemd service, RetroArch autoconfig, firewall):
-cd ~/retropi_server && ./scripts/install.sh        # self-sudos; idempotent
-# overrides: RPC_USER, RPC_PORT, RPC_PROFILE, RPC_AUTOCONFIG_DIR
-sudo journalctl -u iphone-controller -f             # logs incl. the connect QR
-grep -A5 "iPhone Virtual Gamepad" /proc/bus/input/devices   # verify the device (or `evtest`)
+rsync -av --exclude .venv --exclude __pycache__ --exclude .git \
+  --exclude 'webplay/mediamtx/mediamtx' ./ dkim@raspberrypi.local:~/GitHub/retropi_server/
+cd ~/GitHub/retropi_server
+# 1) base :8080 controller (apt deps, uinput, uv+venv, iphone-controller service, autoconfig, firewall):
+./scripts/install.sh                       # self-sudos; idempotent. overrides: RPC_USER/PORT/PROFILE/AUTOCONFIG_DIR
+# 2) webplay appliance layer (MediaMTX download + RetroArch cfg + mediamtx/webplay services + tty1 runner):
+bash webplay/install-services.sh           # idempotent; `... config` re-applies cfg only (safe mid-game)
+sudo reboot                                # boots into the launcher
+# logs / verify:
+sudo journalctl -u iphone-controller -f    # :8080 gamepad (incl. connect QR)
+journalctl -u webplay -u mediamtx -f       # launcher + WebRTC relay
+# play (LAN, low latency): http://raspberrypi.local:8091/    (off-LAN via the :8443 funnel = controls only)
 ```
-`scripts/install.sh` (PEDD §15) is the supported path; `systemd/iphone-controller.service` is a
-reference for manual installs. Dependencies live in `pyproject.toml`, pinned by `uv.lock`;
+`scripts/install.sh` (PEDD §15) sets up the base controller; `webplay/install-services.sh` sets up the
+webplay appliance layer. `systemd/iphone-controller.service` is a reference for manual installs. Dependencies live in `pyproject.toml`, pinned by `uv.lock`;
 `python-uinput` (Linux-only) is platform-gated with `; sys_platform == 'linux'`, so `uv sync`
 skips it on the Mac and builds it only on the Pi (needs `python3-dev` + `libudev-dev` +
 `build-essential`). The installer fetches `uv` to `/usr/local/bin` and runs `uv sync --frozen

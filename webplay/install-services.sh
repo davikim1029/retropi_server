@@ -117,13 +117,20 @@ WantedBy=multi-user.target"
   sudo systemctl enable --now mediamtx.service webplay.service
 }
 
-ensure_deps
-ensure_mediamtx
-configure_retroarch
-install_services
-bash "$SCRIPT_DIR/../spike/tty1.sh" webplay >/dev/null && echo "tty1 -> webplay runner"
-
-sleep 3
-echo "== status =="
-systemctl is-active mediamtx webplay | paste <(printf 'mediamtx\nwebplay\n') -
-echo "Done. 'sudo reboot' to start the launcher runner on tty1."
+# 'config' re-applies deps + MediaMTX + RetroArch cfg only (no service restart — safe
+# while a game is running). 'full' (default) also (re)installs services + the tty1 hook.
+case "${1:-full}" in
+  config)
+    ensure_deps; ensure_mediamtx; configure_retroarch
+    echo "config applied (services/tty1 untouched)."
+    ;;
+  full)
+    ensure_deps; ensure_mediamtx; configure_retroarch; install_services
+    bash "$SCRIPT_DIR/../spike/tty1.sh" webplay >/dev/null && echo "tty1 -> webplay runner"
+    sleep 3
+    echo "== status =="
+    systemctl is-active mediamtx webplay | paste <(printf 'mediamtx\nwebplay\n') -
+    echo "Done. 'sudo reboot' to start the launcher runner on tty1."
+    ;;
+  *) echo "usage: install-services.sh [full|config]" >&2; exit 2 ;;
+esac

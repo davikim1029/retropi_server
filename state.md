@@ -276,8 +276,17 @@ pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
      mediamtx=1**, all `active`/`enabled`, video+audio (2 tracks) live. The tty1 hook (runner) stays
      because RetroArch needs a VT. MediaMTX logs to **journald** now (`journalctl -u mediamtx`), not
      /tmp/mediamtx.log. Vestigial: webplay `server.py` still has the unused jsmpeg `/ws`+reader_thread
-     (harmless under WebRTC; clean up later). **Still pending (enhancement): remote/off-LAN low-latency
-     play** — WebRTC needs UDP so the HTTPS funnel can't carry it; the path is the Tailscale app on the phone.
+     (harmless under WebRTC; clean up later).
+     - **Reproducible installer (2026-06-22):** `webplay/install-services.sh` now does the whole webplay
+       layer idempotently — `ensure_deps` (ffmpeg), `ensure_mediamtx` (downloads the arm64 binary if
+       missing), `configure_retroarch` (`network_cmd_enable`/`network_cmd_port`/`autosave_interval` in the
+       global retroarch.cfg + flips gba `lr-mgba`→`lr-vba-next` if available), `install_services` (the two
+       units), and the tty1 hook. Modes: `full` (default) and `config` (deps+mediamtx+RA cfg only, safe
+       while a game runs). Fresh-Pi rebuild = `./scripts/install.sh` → `bash webplay/install-services.sh`
+       → reboot. The hand-`sed`'d config tweaks are now captured in code. **Docs TODO:** CLAUDE.md still
+       describes the retired MJPEG stream mode (state.md is current).
+     - **Still pending (enhancement): remote/off-LAN low-latency play** — WebRTC needs UDP so the HTTPS
+       funnel can't carry it; the path is the Tailscale app on the phone.
 
 0a. **WORKING (2026-06-21): `webplay/` fork — browser launcher + low-latency play, end-to-end.** [VIDEO NOW
    WEBRTC — see 0w; the jsmpeg/MJPEG transcode path below is superseded but the launcher/runner/control stand.]
