@@ -71,14 +71,14 @@ installer fetches `uv` to `/usr/local/bin` automatically — no manual install n
 
 ```bash
 cd /Users/daviskim/Documents/GitHub/retropi_server
-rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi:~/retropi_server/
+rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi:~/GitHub/retropi_server/
 ```
 
 **2. Run the installer on the Pi** (it self-sudos, so it will prompt for your password):
 
 ```bash
 ssh dkim@raspberrypi
-cd ~/retropi_server
+cd ~/GitHub/retropi_server
 ./scripts/install.sh
 ```
 
@@ -171,6 +171,14 @@ All env vars (set in the shell for `uv run app.py`, or as `Environment=` lines i
 | `RPC_WRITE_AUTOCONFIG` | `1` | Write the RetroArch autoconfig on startup |
 | `RPC_AUTOCONFIG_DIR` | `/opt/retropie/configs/all/retroarch-joypads` | Where to write the autoconfig |
 | `RPC_LOG_LEVEL` | `INFO` | Log level |
+
+Webplay launcher variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RPC_ROMS_DIR` | `~/RetroPie/roms` | Normal RetroPie ROM library scanned by system subfolder, e.g. `gbc/` and `gba/` |
+| `RPC_GAMELISTS_DIR` | `~/.emulationstation/gamelists` | Optional EmulationStation names for ROMs in the normal library |
+| `RPC_CUSTOM_GAMES_DIR` | Sibling `custom_games` next to the repo, e.g. `~/GitHub/custom_games` | Packaged custom ROMs scanned recursively; `dev/` folders are skipped |
 
 ---
 

@@ -1,4 +1,4 @@
-"""Scan the RetroPie ROM library for launchable Game Boy Color / GBA titles.
+"""Scan ROM libraries for launchable Game Boy Color / GBA titles.
 
 Pure filesystem + gamelist.xml parsing (no hardware), so it's fully unit-testable
 on the Mac. The launcher turns these into a browse grid; manager.py maps a pick to
@@ -29,10 +29,14 @@ SYSTEM_EXTS: dict[str, set[str]] = {
     "gba": {".gba"},
 }
 SYSTEM_LABEL = {"gbc": "Game Boy", "gba": "Game Boy Advance"}
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_ROMS_DIR = Path(os.environ.get("RPC_ROMS_DIR", str(Path.home() / "RetroPie/roms")))
 DEFAULT_GAMELISTS_DIR = Path(
     os.environ.get("RPC_GAMELISTS_DIR", str(Path.home() / ".emulationstation/gamelists"))
+)
+DEFAULT_CUSTOM_GAMES_DIR = Path(
+    os.environ.get("RPC_CUSTOM_GAMES_DIR") or str(REPO_ROOT.parent / "custom_games")
 )
 
 
@@ -67,6 +71,14 @@ def _gamelist_names(gamelists_dir: Path, system: str) -> dict[str, str]:
     return names
 
 
+def _system_for_rom(path: Path) -> str | None:
+    suffix = path.suffix.lower()
+    for system, exts in SYSTEM_EXTS.items():
+        if suffix in exts:
+            return system
+    return None
+
+
 def scan_system(system: str, roms_dir: Path, gamelists_dir: Path) -> list[Game]:
     exts = SYSTEM_EXTS.get(system, set())
     d = roms_dir / system
@@ -88,14 +100,57 @@ def scan_system(system: str, roms_dir: Path, gamelists_dir: Path) -> list[Game]:
     return games
 
 
+def scan_custom_games(
+    custom_games_dir: Path | str,
+    systems: tuple[str, ...] = ("gbc", "gba"),
+) -> list[Game]:
+    """Scan packaged custom ROMs, skipping development trees.
+
+    `custom_games` is intentionally outside the RetroPie library, so infer the
+    system from the ROM extension and recurse through project folders. A `dev`
+    subtree may contain build outputs like pokecrystal.gbc; those are sources,
+    not library-ready final artifacts, so they are excluded from the launcher.
+    """
+    root = Path(custom_games_dir)
+    if not root.is_dir():
+        return []
+
+    allowed_systems = set(systems)
+    games: list[Game] = []
+    for current, dirs, files in os.walk(root):
+        dirs[:] = sorted(
+            (d for d in dirs if d != "dev" and not d.startswith(".")),
+            key=str.lower,
+        )
+        for filename in sorted(files, key=str.lower):
+            if filename.startswith("."):
+                continue
+            entry = Path(current) / filename
+            system = _system_for_rom(entry)
+            if system is None or system not in allowed_systems:
+                continue
+            games.append(
+                Game(
+                    system=system,
+                    name=_clean_name(entry.stem),
+                    rom_path=str(entry),
+                    filename=entry.name,
+                )
+            )
+    return games
+
+
 def scan_games(
     roms_dir: Path | str | None = None,
     gamelists_dir: Path | str | None = None,
+    custom_games_dir: Path | str | None = None,
     systems: tuple[str, ...] = ("gbc", "gba"),
 ) -> list[Game]:
     roms = Path(roms_dir) if roms_dir else DEFAULT_ROMS_DIR
     lists = Path(gamelists_dir) if gamelists_dir else DEFAULT_GAMELISTS_DIR
+    custom = Path(custom_games_dir) if custom_games_dir else DEFAULT_CUSTOM_GAMES_DIR
     out: list[Game] = []
     for s in systems:
         out.extend(scan_system(s, roms, lists))
+    out.extend(scan_custom_games(custom, systems))
     return out
