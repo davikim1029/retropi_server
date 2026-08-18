@@ -194,12 +194,16 @@ uv run pytest -q                   # full suite (forces mock via tests/conftest.
 uv run pytest tests/test_input_state.py::test_last_write_wins_per_button  # single test
 ```
 
-**Deploy/install on the Pi.** Real path is **`~/GitHub/retropi_server`**; use **`raspberrypi.local`**
-(LAN) — the bare `raspberrypi` hostname resolves to a flaky Tailscale IP. Frontend files are served
+**Deploy/install on the Pi.** Real path is **`~/GitHub/retropi_server`**; use
+**`dkim@raspberrypi.tail571bc8.ts.net`** for SSH/rsync. Frontend files are served
 no-cache, so an rsync alone is picked up on reload (no restart needed for frontend tweaks).
 ```bash
+# routine redeploy from the Mac (syncs code/deps, restarts iphone-controller + webplay):
+scripts/deploy.sh
+
+# fresh install / unit changes:
 rsync -av --exclude .venv --exclude __pycache__ --exclude .git \
-  --exclude 'webplay/mediamtx/mediamtx' ./ dkim@raspberrypi.local:~/GitHub/retropi_server/
+  --exclude 'webplay/mediamtx/mediamtx' ./ dkim@raspberrypi.tail571bc8.ts.net:~/GitHub/retropi_server/
 cd ~/GitHub/retropi_server
 # 1) base :8080 controller (apt deps, uinput, uv+venv, iphone-controller service, autoconfig, firewall):
 ./scripts/install.sh                       # self-sudos; idempotent. overrides: RPC_USER/PORT/PROFILE/AUTOCONFIG_DIR

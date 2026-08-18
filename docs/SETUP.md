@@ -61,7 +61,7 @@ Stop the server with `Ctrl-C`.
 
 ## Part B — Deploy & install on the Pi
 
-The Pi is reachable at `ssh dkim@raspberrypi`. One script does everything: system packages
+The Pi is reachable at `ssh dkim@raspberrypi.tail571bc8.ts.net`. One script does everything: system packages
 (incl. the `joystick`/`jstest` + `evtest` diagnostics), the uinput module + permissions, **uv and
 the venv** (`uv sync`), the systemd service, the RetroArch autoconfig, the EmulationStation
 joystick mapping (so the pad drives the launcher menus), and (if present) the firewall rule. (The
@@ -71,19 +71,36 @@ installer fetches `uv` to `/usr/local/bin` automatically — no manual install n
 
 ```bash
 cd /Users/daviskim/Documents/GitHub/retropi_server
-rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi:~/GitHub/retropi_server/
+rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi.tail571bc8.ts.net:~/GitHub/retropi_server/
 ```
 
 **2. Run the installer on the Pi** (it self-sudos, so it will prompt for your password):
 
 ```bash
-ssh dkim@raspberrypi
+ssh dkim@raspberrypi.tail571bc8.ts.net
 cd ~/GitHub/retropi_server
 ./scripts/install.sh
 ```
 
 Overrides (optional): `RPC_PORT=9000 ./scripts/install.sh` — also `RPC_USER`, `RPC_PROFILE`,
 `RPC_AUTOCONFIG_DIR`. The script is **idempotent**; re-run it any time (e.g. after pulling new code).
+
+For routine code updates after the Pi is already installed, use the lighter deploy helper from
+the Mac instead of rerunning the full installer:
+
+```bash
+cd /Users/daviskim/Documents/GitHub/retropi_server
+scripts/deploy.sh
+```
+
+It rsyncs the repo to `raspberrypi.tail571bc8.ts.net`, runs `uv sync --frozen --no-dev` on the Pi, then
+restarts the installed Python services (`iphone-controller` and `webplay`) so backend changes are
+loaded. Use the full installers again when changing systemd units, RetroArch config, apt/system
+dependencies, or the tty1 runner setup.
+
+By default the helper fails fast if SSH cannot connect or prompts for auth. For first-time SSH
+setup, use `scripts/deploy.sh --interactive`; for a slower network, set
+`RPC_DEPLOY_CONNECT_TIMEOUT=30`.
 
 **3. If it warns that `/dev/uinput` isn't present yet**, reboot once so the module autoloads:
 
@@ -193,4 +210,5 @@ sudo journalctl -u iphone-controller -f      # follow logs
 ```
 
 To update after changing code: re-`rsync` from the Mac, then
-`sudo systemctl restart iphone-controller` (or re-run `./scripts/install.sh`).
+`sudo systemctl restart iphone-controller` (or use `scripts/deploy.sh` from the Mac to sync and
+restart both `iphone-controller` and `webplay`).

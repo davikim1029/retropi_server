@@ -184,15 +184,20 @@ pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
 - **Dev machine:** macOS (darwin). Repo at `/Users/daviskim/Documents/GitHub/retropi_server`.
   Deps via **uv** (`uv sync` builds `.venv`). Python is pinned to **3.12** via `.python-version`
   (uv-managed; system `python3` is 3.14.x but unused for the project). Git repo, branch `main`.
-- **Target Pi:** `ssh dkim@raspberrypi` (**key auth + passwordless sudo** — installer runs
-  non-interactively over SSH), user **`dkim`**, hostname `raspberrypi.local`. OS is **Raspberry Pi
+- **Target Pi:** `ssh dkim@raspberrypi.tail571bc8.ts.net` (**key auth + passwordless sudo** —
+  installer runs non-interactively over SSH), user **`dkim`**, LAN hostname `raspberrypi.local`.
+  OS is **Raspberry Pi
   OS Bullseye, aarch64, system Python 3.9.2** — too old for the code's 3.10+ syntax, so uv fetches
   a **managed CPython 3.12** at install. Service runs as `dkim`. Default port **8080**.
   Repo lives at **`/home/dkim/GitHub/retropi_server`** (single dir — confirmed via the systemd
   unit's `WorkingDirectory` on 2026-06-06; the earlier "doubled dir" note was wrong).
 - **RetroPie joypad dir (default):** `/opt/retropie/configs/all/retroarch-joypads`.
-- Deploy via `rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi:~/GitHub/retropi_server/`,
-  then `ssh dkim@raspberrypi 'cd ~/GitHub/retropi_server && ./scripts/install.sh'`.
+- Routine redeploy via `scripts/deploy.sh` from the Mac. It rsyncs to
+  `dkim@raspberrypi.tail571bc8.ts.net:/home/dkim/GitHub/retropi_server`, runs
+  `uv sync --frozen --no-dev` on the Pi, then restarts the installed Python services
+  (`iphone-controller`, `webplay`) so new backend code is loaded.
+- Fresh install / unit changes via `rsync -av --exclude .venv --exclude __pycache__ --exclude .git ./ dkim@raspberrypi.tail571bc8.ts.net:~/GitHub/retropi_server/`,
+  then `ssh dkim@raspberrypi.tail571bc8.ts.net 'cd ~/GitHub/retropi_server && ./scripts/install.sh'`.
 
 ---
 
@@ -422,8 +427,10 @@ uv run pytest -q                       # 25 tests
 uv run app.py                          # http://localhost:8080
 
 # Pi (real)
-rsync -av --exclude .venv ./ dkim@raspberrypi:~/retropi_server/
-ssh dkim@raspberrypi 'cd ~/retropi_server && ./scripts/install.sh'
+scripts/deploy.sh
+# Fresh install / unit changes:
+rsync -av --exclude .venv ./ dkim@raspberrypi.tail571bc8.ts.net:~/GitHub/retropi_server/
+ssh dkim@raspberrypi.tail571bc8.ts.net 'cd ~/GitHub/retropi_server && ./scripts/install.sh'
 ```
 
 Full details: `docs/SETUP.md`. Operating guidance for Claude: `CLAUDE.md`.
