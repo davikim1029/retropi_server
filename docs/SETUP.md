@@ -195,7 +195,7 @@ Webplay launcher variables:
 |---|---|---|
 | `RPC_ROMS_DIR` | `~/RetroPie/roms` | Normal RetroPie ROM library scanned by system subfolder, e.g. `gbc/` and `gba/` |
 | `RPC_GAMELISTS_DIR` | `~/.emulationstation/gamelists` | Optional EmulationStation names for ROMs in the normal library |
-| `RPC_CUSTOM_GAMES_DIR` | Sibling `custom_games` next to the repo, e.g. `~/GitHub/custom_games` | Packaged custom ROMs scanned recursively; `dev/` folders are skipped |
+| `RPC_CUSTOM_GAMES_DIR` | Optional override; otherwise scanner-derived repo-local `custom_games/` plus sibling `../custom_games` | Packaged custom ROMs scanned recursively; `~` is expanded; `dev/` folders are skipped |
 
 ---
 

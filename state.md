@@ -221,11 +221,12 @@ pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
 
 0e. **Enhancements (2026-06-21).**
    - **Custom ROM library scan (2026-08-18):** `webplay/scanner.py` still reads the normal RetroPie
-     library from `RPC_ROMS_DIR` / `~/RetroPie/roms`, and now also scans a project-local custom library.
-     Default is the sibling folder next to this repo (`../custom_games`, e.g. `~/GitHub/custom_games`
-     on the Pi), with `RPC_CUSTOM_GAMES_DIR` as an override. The custom scan recurses for `.gb`, `.gbc`,
-     and `.gba` files but skips any `dev/` subtree so packaged ROMs appear without duplicate build
-     artifacts from source checkouts.
+     library from `RPC_ROMS_DIR` / `~/RetroPie/roms`, and now also scans committed repo-local
+     `custom_games/` packages plus the older sibling `../custom_games` folder. `RPC_CUSTOM_GAMES_DIR`
+     overrides both defaults and expands `~`. The repo-local path is derived from `webplay/scanner.py`,
+     so moving the repo moves the default custom library with it. The custom scan recurses for `.gb`,
+     `.gbc`, and `.gba` files but skips any `dev/` subtree so packaged ROMs appear without duplicate
+     build artifacts from source checkouts.
    - **Services auto-start:** confirmed `iphone-controller`, `mediamtx`, `webplay` all `enabled` (boot-start).
    - **GBA core → `lr-vba-next`** (lighter than mgba; Pi ~79°C/thermal edge; saves backed up to `~/gba_srm_backup_*`).
    - **Scanner name cleanup** (strips `0907 - ` catalog prefixes).
@@ -276,7 +277,8 @@ pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
      WiFi for low latency. The **`:8443` funnel can't carry WebRTC media** (HTTPS/TCP only): over the funnel
      controls work but video won't (remote video = a later problem; Tailscale-app on the phone is the path).
    - **Also (2026-06-21):** scanner strips ROM catalog prefixes (`0907 - Pokemon…` → `Pokemon - Ruby Version`);
-     and, as of 2026-08-18, merges packaged custom ROMs from `RPC_CUSTOM_GAMES_DIR` / `../custom_games`;
+     and, as of 2026-08-18, merges packaged custom ROMs from repo-local `custom_games/`,
+     sibling `../custom_games`, or `RPC_CUSTOM_GAMES_DIR`;
      **GBA default switched `lr-mgba` → `lr-vba-next`** (lighter; Pi 3B runs ~79°C / thermal-throttle edge under
      mGBA+encode — no overclock set, undervoltage is hardware/thermal, user improving cooling). GBA saves
      backed up to `~/gba_srm_backup_*`.
@@ -312,7 +314,8 @@ pytest.ini  .gitignore  CLAUDE.md   state.md (this file)
      → `webplay/server.py` FIFO→WS relay → **jsmpeg** in mobile Safari. Controls: `/control` WS proxy →
      `:8080` gamepad app → uinput → RetroArch (`Autoconf: iPhone Virtual Gamepad configured in port 1`).
    - **Launcher:** `webplay/scanner.py` (enumerate `~/RetroPie/roms/{gbc,gba}`, names from gamelist.xml,
-     plus packaged custom ROMs from `RPC_CUSTOM_GAMES_DIR` / sibling `../custom_games`, skipping `dev/`),
+     plus packaged custom ROMs from repo-local `custom_games/`, sibling `../custom_games`, or
+     `RPC_CUSTOM_GAMES_DIR`, skipping `dev/`),
      `webplay/manager.py` (POST launch → writes a request line to the `/tmp/rpc_launch` FIFO; reads
      `/tmp/rpc_state`), `webplay/server.py` API (`/api/games`, `/api/launch`, `/api/state`). The **tty1
      runner** `webplay/runner.sh` idle-loops on the launch FIFO (held `exec 3<>` so non-blocking writes

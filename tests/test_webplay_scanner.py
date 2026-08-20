@@ -74,6 +74,50 @@ def test_scan_merges_custom_games_and_skips_dev(tmp_path):
     assert "pokecrystal.gbc" not in by_file
 
 
+def test_scan_defaults_to_repo_local_custom_games_and_keeps_sibling(tmp_path, monkeypatch):
+    roms, lists = _make_library(tmp_path)
+    repo_custom = tmp_path / "repo" / "custom_games"
+    sibling_custom = tmp_path / "custom_games"
+    repo_custom.mkdir(parents=True)
+    sibling_custom.mkdir(parents=True)
+    (repo_custom / "Repo Adventure.gbc").write_bytes(b"x")
+    (sibling_custom / "Repo Adventure.gbc").write_bytes(b"x")
+    (sibling_custom / "Sibling Quest.gba").write_bytes(b"x")
+
+    import webplay.scanner as sc
+
+    monkeypatch.delenv("RPC_CUSTOM_GAMES_DIR", raising=False)
+    monkeypatch.setattr(sc, "DEFAULT_CUSTOM_GAMES_DIR", repo_custom)
+    monkeypatch.setattr(sc, "SIBLING_CUSTOM_GAMES_DIR", sibling_custom)
+
+    games = sc.scan_games(roms, lists)
+    by_file = {g.filename: g for g in games}
+
+    assert "Repo Adventure.gbc" in by_file
+    assert by_file["Repo Adventure.gbc"].system == "gbc"
+    assert sum(g.filename == "Repo Adventure.gbc" for g in games) == 1
+    assert "Sibling Quest.gba" in by_file
+    assert by_file["Sibling Quest.gba"].system == "gba"
+
+
+def test_custom_games_env_override_expands_user(tmp_path, monkeypatch):
+    roms, lists = _make_library(tmp_path)
+    home = tmp_path / "home"
+    custom = home / "GitHub" / "retropi_server" / "custom_games"
+    custom.mkdir(parents=True)
+    (custom / "Home Path.gbc").write_bytes(b"x")
+
+    import webplay.scanner as sc
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("RPC_CUSTOM_GAMES_DIR", "~/GitHub/retropi_server/custom_games")
+
+    games = sc.scan_games(roms, lists)
+    by_file = {g.filename: g for g in games}
+
+    assert by_file["Home Path.gbc"].rom_path == str(custom / "Home Path.gbc")
+
+
 def test_games_api(tmp_path, monkeypatch):
     roms, lists = _make_library(tmp_path)
     monkeypatch.setenv("RPC_ROMS_DIR", str(roms))
@@ -84,6 +128,7 @@ def test_games_api(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "DEFAULT_ROMS_DIR", roms)
     monkeypatch.setattr(sc, "DEFAULT_GAMELISTS_DIR", lists)
     monkeypatch.setattr(sc, "DEFAULT_CUSTOM_GAMES_DIR", tmp_path / "missing_custom_games")
+    monkeypatch.setattr(sc, "SIBLING_CUSTOM_GAMES_DIR", tmp_path / "missing_sibling_custom_games")
 
     with TestClient(create_app()) as client:
         data = client.get("/api/games").json()

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -23,6 +24,11 @@ def _clean_name(raw: str) -> str:
     name = _CATALOG_PREFIX.sub("", raw).replace("_", " ").strip()
     return name or raw
 
+
+def _path(value: Path | str) -> Path:
+    return Path(value).expanduser()
+
+
 # system -> playable ROM extensions (lowercase). Save/state/zip files are excluded.
 SYSTEM_EXTS: dict[str, set[str]] = {
     "gbc": {".gbc", ".gb"},
@@ -31,13 +37,13 @@ SYSTEM_EXTS: dict[str, set[str]] = {
 SYSTEM_LABEL = {"gbc": "Game Boy", "gba": "Game Boy Advance"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_ROMS_DIR = Path(os.environ.get("RPC_ROMS_DIR", str(Path.home() / "RetroPie/roms")))
+DEFAULT_ROMS_DIR = _path(os.environ.get("RPC_ROMS_DIR", str(Path.home() / "RetroPie/roms")))
 DEFAULT_GAMELISTS_DIR = Path(
     os.environ.get("RPC_GAMELISTS_DIR", str(Path.home() / ".emulationstation/gamelists"))
-)
-DEFAULT_CUSTOM_GAMES_DIR = Path(
-    os.environ.get("RPC_CUSTOM_GAMES_DIR") or str(REPO_ROOT.parent / "custom_games")
-)
+).expanduser()
+REPO_CUSTOM_GAMES_DIR = REPO_ROOT / "custom_games"
+SIBLING_CUSTOM_GAMES_DIR = REPO_ROOT.parent / "custom_games"
+DEFAULT_CUSTOM_GAMES_DIR = REPO_CUSTOM_GAMES_DIR
 
 
 @dataclass(frozen=True)
@@ -111,7 +117,7 @@ def scan_custom_games(
     subtree may contain build outputs like pokecrystal.gbc; those are sources,
     not library-ready final artifacts, so they are excluded from the launcher.
     """
-    root = Path(custom_games_dir)
+    root = _path(custom_games_dir)
     if not root.is_dir():
         return []
 
@@ -140,17 +146,44 @@ def scan_custom_games(
     return games
 
 
+def _default_custom_games_dirs() -> tuple[Path, ...]:
+    override = os.environ.get("RPC_CUSTOM_GAMES_DIR")
+    if override:
+        return (_path(override),)
+
+    dirs = []
+    for path in (DEFAULT_CUSTOM_GAMES_DIR, SIBLING_CUSTOM_GAMES_DIR):
+        if path not in dirs:
+            dirs.append(path)
+    return tuple(dirs)
+
+
+def _custom_games_dirs(custom_games_dir: Path | str | Sequence[Path | str] | None) -> tuple[Path, ...]:
+    if custom_games_dir is None:
+        return _default_custom_games_dirs()
+    if isinstance(custom_games_dir, (str, Path)):
+        return (_path(custom_games_dir),)
+    return tuple(_path(path) for path in custom_games_dir)
+
+
 def scan_games(
     roms_dir: Path | str | None = None,
     gamelists_dir: Path | str | None = None,
-    custom_games_dir: Path | str | None = None,
+    custom_games_dir: Path | str | Sequence[Path | str] | None = None,
     systems: tuple[str, ...] = ("gbc", "gba"),
 ) -> list[Game]:
-    roms = Path(roms_dir) if roms_dir else DEFAULT_ROMS_DIR
-    lists = Path(gamelists_dir) if gamelists_dir else DEFAULT_GAMELISTS_DIR
-    custom = Path(custom_games_dir) if custom_games_dir else DEFAULT_CUSTOM_GAMES_DIR
+    roms = _path(roms_dir) if roms_dir else DEFAULT_ROMS_DIR
+    lists = _path(gamelists_dir) if gamelists_dir else DEFAULT_GAMELISTS_DIR
     out: list[Game] = []
     for s in systems:
         out.extend(scan_system(s, roms, lists))
-    out.extend(scan_custom_games(custom, systems))
+
+    seen_custom_games: set[tuple[str, str]] = set()
+    for custom in _custom_games_dirs(custom_games_dir):
+        for game in scan_custom_games(custom, systems):
+            key = (game.system, game.filename.lower())
+            if key in seen_custom_games:
+                continue
+            seen_custom_games.add(key)
+            out.append(game)
     return out
